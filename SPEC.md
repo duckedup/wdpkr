@@ -264,9 +264,11 @@ The indexer maintains a single SHA in turbopuffer namespace metadata: the last-s
 
 ### CI integration
 
-- Triggered by merge to main via GitHub Actions (or equivalent).
-- `concurrency: { group: megagrep-${repo}, cancel-in-progress: true }` — when a new merge lands, kill any running indexer for stale state. We don't want to write embeddings derived from a SHA that's already been superseded.
-- Auth: `TURBOPUFFER_API_KEY`, `VOYAGE_API_KEY`, `ANTHROPIC_API_KEY` injected as secrets. (Substitute `OPENAI_API_KEY` if using OpenAI embedder.)
+- Designed to be triggered by merge to main (or on a schedule) via GitHub Actions or equivalent. The triggering mechanism is up to the consumer — megagrep's only contract is: `megagrep index` runs in a git checkout with env vars set.
+- Requires `fetch-depth: 0` (full history) — the indexer needs `git diff HWM..HEAD` which fails on shallow clones.
+- `concurrency: { group: megagrep-${repo}, cancel-in-progress: true }` — concurrent indexer runs against the same namespace are unsafe. The CI workflow should ensure only one runs at a time, killing stale runs when a new merge lands.
+- The config system (see [Configuration](#configuration)) is fully env-var-driven — CI never needs a config file. Credentials go in secrets; provider/tuning overrides go in workflow-level `env:` blocks.
+- `megagrep init` generates a starter workflow file (`.github/workflows/megagrep.yml`) so teams don't write this boilerplate by hand.
 
 ---
 
@@ -360,7 +362,7 @@ megagrep index [flags]
 
 ### `megagrep config`
 
-`git config`-style management with dotted keys (`store.provider`, `embedder.model`, `summarizer.model`, `default_branch`).
+`git config`-style management with dotted keys mapped to the `FileConfig` struct hierarchy (e.g., `embedder.model`, `indexer.concurrency`, `store.provider`).
 
 ```
 megagrep config init                  # write default ~/.config/megagrep/config.yaml
@@ -371,7 +373,19 @@ megagrep config edit                  # open in $EDITOR
 megagrep config path                  # print resolved config file location
 ```
 
-`config list` showing the resolution chain (which value came from which source — env, file, default) is the debugging affordance.
+`config list` is the key debugging affordance — it shows the resolved value for every field and where it came from:
+
+```
+$ megagrep config list
+embedder.provider    = voyage          [default]
+embedder.model       = voyage-code-3   [env: MEGAGREP_EMBED_MODEL]
+indexer.concurrency  = 16              [file: ~/.config/megagrep/config.yaml]
+indexer.max_cost     = 50              [default]
+store.provider       = turbopuffer     [default]
+...
+```
+
+This makes it trivial to debug "why is it using this model?" in both local and CI contexts.
 
 ---
 
@@ -388,38 +402,429 @@ This pattern matches `gh`, `gcloud`, and `aws` CLI conventions: user config in `
 ### Resolution order
 
 ```
-defaults  →  config file  →  env vars
+defaults  →  config file  →  env vars  →  CLI flags
 ```
 
-Later sources override earlier ones.
+Later sources override earlier ones. This four-layer chain matters because **different contexts use different layers:**
 
-### Config schema (relevant sections)
+- **Local dev:** config file (`~/.config/megagrep/config.yaml`) for stable settings, env vars for credentials.
+- **CI / GitHub Actions:** env vars for everything. No config file exists in CI runners, and that's fine — the system must be fully configurable via env vars alone.
+- **One-off overrides:** CLI flags (e.g., `--concurrency 16` for a large reindex, `--max-cost 100` for bootstrap).
+
+### Config implementation: `env_or` pattern
+
+Following the Dayforward codebase convention (`dayforward/src/config/src`), config resolution uses a single generic function that checks an env var and falls back to a default. The "default" at each call site is the config-file value if one was loaded, otherwise the hardcoded default. This keeps resolution explicit — every field's env var name and fallback are visible in one place.
+
+#### Core resolution function
+
+```rust
+// src/config/mod.rs
+
+/// Read an environment variable, parse it, or fall back to `default`.
+/// Silent fallback — parse failures use the default without error.
+/// This matches the Dayforward `env_or` pattern.
+pub(crate) fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+```
+
+For the config-file layer, we load `~/.config/megagrep/config.yaml` into an `Option<FileConfig>` (all fields optional via serde). Each `from_env()` method uses the file value as the fallback when present:
+
+```rust
+/// Helper: use the config-file value if present, otherwise the hardcoded default.
+fn file_or<T>(file_val: Option<T>, default: T) -> T {
+    file_val.unwrap_or(default)
+}
+```
+
+The full resolution for any field is then:
+
+```rust
+// env var wins → config file value → hardcoded default
+let concurrency = env_or("MEGAGREP_CONCURRENCY", file_or(file.concurrency, 8));
+```
+
+#### Module layout
+
+```
+src/config/
+├── mod.rs          # Config struct, env_or, file loading, from_env()
+├── store.rs        # StoreConfig — vector store provider
+├── embed.rs        # EmbedConfig — embedding provider
+├── summarizer.rs   # SummarizerConfig — LLM summarizer
+├── indexer.rs       # IndexerConfig — indexing behavior
+```
+
+Each module owns its env var names, defaults, and `from_env()` constructor. The top-level `Config` aggregates them.
+
+#### Top-level config
+
+```rust
+// src/config/mod.rs
+
+mod store;
+mod embed;
+mod summarizer;
+mod indexer;
+
+pub use store::StoreConfig;
+pub use embed::EmbedConfig;
+pub use summarizer::SummarizerConfig;
+pub use indexer::IndexerConfig;
+
+pub struct Config {
+    pub store: StoreConfig,
+    pub embed: EmbedConfig,
+    pub summarizer: SummarizerConfig,
+    pub indexer: IndexerConfig,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        let file = FileConfig::load(); // None if file missing or malformed
+        Self {
+            store: StoreConfig::from_env(&file),
+            embed: EmbedConfig::from_env(&file),
+            summarizer: SummarizerConfig::from_env(&file),
+            indexer: IndexerConfig::from_env(&file),
+        }
+    }
+}
+```
+
+#### `StoreConfig`
+
+```rust
+// src/config/store.rs
+
+pub struct StoreConfig {
+    pub provider: String,       // "turbopuffer"
+    pub api_key: String,        // credential — env-only, never in config file
+}
+
+impl StoreConfig {
+    pub fn from_env(file: &Option<FileConfig>) -> Self {
+        let f = file.as_ref().and_then(|f| f.store.as_ref());
+        Self {
+            provider: env_or(
+                "MEGAGREP_STORE_PROVIDER",
+                file_or(f.map(|s| s.provider.clone()), "turbopuffer".into()),
+            ),
+            api_key: env_or("TURBOPUFFER_API_KEY", String::new()),
+        }
+    }
+}
+```
+
+#### `EmbedConfig`
+
+```rust
+// src/config/embed.rs
+
+pub struct EmbedConfig {
+    pub provider: String,       // "voyage" | "ollama" | "openai"
+    pub model: String,          // provider-specific model name
+    pub batch_size: usize,      // texts per API call
+
+    // Provider-specific credentials / endpoints
+    pub voyage_api_key: String,
+    pub openai_api_key: String,
+    pub ollama_host: String,
+}
+
+impl EmbedConfig {
+    pub fn from_env(file: &Option<FileConfig>) -> Self {
+        let f = file.as_ref().and_then(|f| f.embedder.as_ref());
+
+        let provider = env_or(
+            "MEGAGREP_EMBED_PROVIDER",
+            file_or(f.map(|e| e.provider.clone()), "voyage".into()),
+        );
+
+        // Default model depends on the resolved provider
+        let default_model = match provider.as_str() {
+            "voyage" => "voyage-code-3",
+            "ollama" => "nomic-embed-text",
+            "openai" => "text-embedding-3-large",
+            _ => "voyage-code-3",
+        };
+
+        Self {
+            provider: provider.clone(),
+            model: env_or(
+                "MEGAGREP_EMBED_MODEL",
+                file_or(f.and_then(|e| e.model.clone()), default_model.into()),
+            ),
+            batch_size: env_or(
+                "MEGAGREP_EMBED_BATCH_SIZE",
+                file_or(f.and_then(|e| e.batch_size), 64),
+            ),
+            voyage_api_key: env_or("VOYAGE_API_KEY", String::new()),
+            openai_api_key: env_or("OPENAI_API_KEY", String::new()),
+            ollama_host: env_or(
+                "OLLAMA_HOST",
+                file_or(f.and_then(|e| e.ollama_host.clone()), "http://localhost:11434".into()),
+            ),
+        }
+    }
+
+    /// Validate that the selected provider's required credential is set.
+    /// Called at startup — fail fast, not on first API call.
+    pub fn validate(&self) -> Result<()> {
+        match self.provider.as_str() {
+            "voyage" if self.voyage_api_key.is_empty() => {
+                bail!("VOYAGE_API_KEY is required when embedder.provider=voyage")
+            }
+            "openai" if self.openai_api_key.is_empty() => {
+                bail!("OPENAI_API_KEY is required when embedder.provider=openai")
+            }
+            _ => Ok(()),
+        }
+    }
+}
+```
+
+**Key design choice:** the default model is derived from the resolved provider, not hardcoded independently. If someone sets `MEGAGREP_EMBED_PROVIDER=ollama` but doesn't set `MEGAGREP_EMBED_MODEL`, they get `nomic-embed-text` — not `voyage-code-3` for a provider that doesn't serve it.
+
+#### `SummarizerConfig`
+
+```rust
+// src/config/summarizer.rs
+
+pub struct SummarizerConfig {
+    pub provider: String,       // "anthropic"
+    pub model: String,          // Anthropic model name
+    pub api_key: String,        // credential — env-only
+}
+
+impl SummarizerConfig {
+    pub fn from_env(file: &Option<FileConfig>) -> Self {
+        let f = file.as_ref().and_then(|f| f.summarizer.as_ref());
+        Self {
+            provider: env_or(
+                "MEGAGREP_SUMMARIZER_PROVIDER",
+                file_or(f.map(|s| s.provider.clone()), "anthropic".into()),
+            ),
+            model: env_or(
+                "MEGAGREP_SUMMARIZER_MODEL",
+                file_or(
+                    f.and_then(|s| s.model.clone()),
+                    "claude-haiku-4-5-20251001".into(),
+                ),
+            ),
+            api_key: env_or("ANTHROPIC_API_KEY", String::new()),
+        }
+    }
+}
+```
+
+#### `IndexerConfig`
+
+```rust
+// src/config/indexer.rs
+
+pub struct IndexerConfig {
+    pub namespace: String,            // auto-derived if empty
+    pub default_branch: String,
+    pub concurrency: usize,
+    pub max_cost: f64,                // USD
+    pub hwm_success_threshold: f64,   // 0.0–1.0
+}
+
+impl IndexerConfig {
+    pub fn from_env(file: &Option<FileConfig>) -> Self {
+        let f = file.as_ref().and_then(|f| f.indexer.as_ref());
+        Self {
+            namespace: env_or(
+                "MEGAGREP_NAMESPACE",
+                file_or(f.and_then(|i| i.namespace.clone()), String::new()),
+            ),
+            default_branch: env_or(
+                "MEGAGREP_DEFAULT_BRANCH",
+                file_or(f.and_then(|i| i.default_branch.clone()), "main".into()),
+            ),
+            concurrency: env_or(
+                "MEGAGREP_CONCURRENCY",
+                file_or(f.and_then(|i| i.concurrency), 8),
+            ),
+            max_cost: env_or(
+                "MEGAGREP_MAX_COST",
+                file_or(f.and_then(|i| i.max_cost), 50.0),
+            ),
+            hwm_success_threshold: env_or(
+                "MEGAGREP_HWM_SUCCESS_THRESHOLD",
+                file_or(f.and_then(|i| i.hwm_success_threshold), 0.95),
+            ),
+        }
+    }
+}
+```
+
+#### Config file schema (serde target)
+
+The config file is deserialized into a struct with all optional fields. Missing keys are `None`, which `file_or` treats as "use the hardcoded default."
+
+```rust
+// src/config/mod.rs
+
+#[derive(Deserialize, Default)]
+pub struct FileConfig {
+    pub store: Option<FileStoreConfig>,
+    pub embedder: Option<FileEmbedConfig>,
+    pub summarizer: Option<FileSummarizerConfig>,
+    pub indexer: Option<FileIndexerConfig>,
+}
+
+#[derive(Deserialize)]
+pub struct FileStoreConfig {
+    pub provider: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FileEmbedConfig {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub batch_size: Option<usize>,
+    pub ollama_host: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FileSummarizerConfig {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FileIndexerConfig {
+    pub namespace: Option<String>,
+    pub default_branch: Option<String>,
+    pub concurrency: Option<usize>,
+    pub max_cost: Option<f64>,
+    pub hwm_success_threshold: Option<f64>,
+}
+
+impl FileConfig {
+    pub fn load() -> Option<Self> {
+        let path = dirs::config_dir()?.join("megagrep/config.yaml");
+        let content = std::fs::read_to_string(&path).ok()?;
+        serde_yaml::from_str(&content).ok()
+    }
+}
+```
+
+#### Corresponding `config.yaml`
 
 ```yaml
-# ~/.config/megagrep/config.yaml
+# ~/.config/megagrep/config.yaml — for local dev use.
+# Every field is optional. Env vars override all values here.
+# Credentials (API keys) should be set via env vars, not this file.
 
 store:
-  provider: turbopuffer      # only option in v1
-  # api_key: via TURBOPUFFER_API_KEY env var (never in config file)
+  provider: turbopuffer
 
 embedder:
-  provider: voyage           # "voyage" | "ollama" | "openai"
-  model: voyage-code-3       # override default model for the provider
-  batch_size: 64             # texts per API call
-  # Ollama-specific:
-  # host: http://localhost:11434
+  provider: voyage
+  model: voyage-code-3
+  batch_size: 64
+  # ollama_host: http://localhost:11434
 
 summarizer:
-  provider: anthropic        # only option in v1
+  provider: anthropic
   model: claude-haiku-4-5-20251001
 
-chunker:
-  provider: tree-sitter      # only option in v1
-
-default_branch: main
+indexer:
+  # namespace: ""             # auto-derived from git remote if empty
+  default_branch: main
+  concurrency: 8
+  max_cost: 50
+  hwm_success_threshold: 0.95
 ```
 
-**Env var naming convention:** `MEGAGREP_<COMPONENT>_<KEY>` for megagrep-specific settings (e.g., `MEGAGREP_EMBED_PROVIDER`, `MEGAGREP_EMBED_MODEL`). Provider credentials use the provider's standard env var name (`VOYAGE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, `TURBOPUFFER_API_KEY`). This avoids inventing new credential env vars when the ecosystem already has conventions.
+#### Testing pattern
+
+Following Dayforward convention, each config module has tests verifying both defaults and env overrides. Uses `serial_test` to isolate env var mutations:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn embed_config_defaults() {
+        // Clear all relevant env vars
+        std::env::remove_var("MEGAGREP_EMBED_PROVIDER");
+        std::env::remove_var("MEGAGREP_EMBED_MODEL");
+        std::env::remove_var("MEGAGREP_EMBED_BATCH_SIZE");
+
+        let cfg = EmbedConfig::from_env(&None);
+        assert_eq!(cfg.provider, "voyage");
+        assert_eq!(cfg.model, "voyage-code-3");
+        assert_eq!(cfg.batch_size, 64);
+    }
+
+    #[test]
+    #[serial]
+    fn embed_config_env_overrides() {
+        std::env::set_var("MEGAGREP_EMBED_PROVIDER", "ollama");
+        // Model should auto-derive from provider when not set
+        std::env::remove_var("MEGAGREP_EMBED_MODEL");
+
+        let cfg = EmbedConfig::from_env(&None);
+        assert_eq!(cfg.provider, "ollama");
+        assert_eq!(cfg.model, "nomic-embed-text");
+
+        // Cleanup
+        std::env::remove_var("MEGAGREP_EMBED_PROVIDER");
+    }
+}
+```
+
+### Environment variable quick reference
+
+Complete list for CI/CD use. Every value is configurable via env var alone — no config file needed.
+
+**Credentials (provider-standard names):**
+
+| Env var                | Required when              |
+|------------------------|----------------------------|
+| `TURBOPUFFER_API_KEY`  | Always (v1 store)          |
+| `VOYAGE_API_KEY`       | `embed.provider=voyage`    |
+| `OPENAI_API_KEY`       | `embed.provider=openai`    |
+| `ANTHROPIC_API_KEY`    | Always (v1 summarizer)     |
+| `OLLAMA_HOST`          | `embed.provider=ollama` (default: `http://localhost:11434`) |
+
+**Megagrep settings:**
+
+| Env var                          | Default                     |
+|----------------------------------|-----------------------------|
+| `MEGAGREP_STORE_PROVIDER`        | `turbopuffer`               |
+| `MEGAGREP_EMBED_PROVIDER`        | `voyage`                    |
+| `MEGAGREP_EMBED_MODEL`           | per-provider (see `EmbedConfig`) |
+| `MEGAGREP_EMBED_BATCH_SIZE`      | `64`                        |
+| `MEGAGREP_SUMMARIZER_PROVIDER`   | `anthropic`                 |
+| `MEGAGREP_SUMMARIZER_MODEL`      | `claude-haiku-4-5-20251001` |
+| `MEGAGREP_NAMESPACE`             | auto-derived from git remote|
+| `MEGAGREP_DEFAULT_BRANCH`        | `main`                      |
+| `MEGAGREP_CONCURRENCY`           | `8`                         |
+| `MEGAGREP_MAX_COST`              | `50`                        |
+| `MEGAGREP_HWM_SUCCESS_THRESHOLD` | `0.95`                      |
+
+CLI flags (`--concurrency`, `--max-cost`, etc.) override env vars for that invocation.
+
+### CI-first configuration
+
+The env var surface is designed so that **CI never needs a config file.** A GitHub Actions workflow sets env vars from secrets and workflow-level `env:` blocks; that's the entire config story. The config file exists for developer convenience on their local machine — CI should never depend on it.
+
+**Critical invariant: embedder must match between indexing and search.** If CI indexes with `voyage-code-3` and a developer's local config uses `openai`, query embeddings will be in a different vector space than the stored embeddings. The `NamespaceMetadata.embedder` field in the vector store catches this — search will fail with a clear error message ("index was built with voyage/voyage-code-3, but search is configured for openai/text-embedding-3-large; run `megagrep index --full` to reindex or change your embedder config"). This is a hard error, not a warning.
+
+In practice, this means local developers need either:
+- The same embedder provider + API key as CI (recommended — just set `VOYAGE_API_KEY` locally), or
+- A local config file that matches CI's embedder choice (the defaults handle this if CI also uses defaults)
 
 ### Pluggable backends
 
@@ -688,8 +1093,10 @@ Honest reasoning (the perf claim is more nuanced than it first appears):
 | JSON                  | `serde` + `serde_json`                 |
 | CLI parsing           | `clap` (derive macros)                 |
 | Tree-sitter           | `tree-sitter` + `tree-sitter-{go,rust,typescript,javascript,python,java,cpp,c-sharp}` |
+| Config file parsing   | `serde_yaml` + `dirs` (XDG path resolution) |
 | Token counting        | `tiktoken-rs`                          |
 | Bounded parallelism   | `futures::stream::buffer_unordered`    |
+| Test isolation        | `serial_test` (env var isolation in config tests) |
 | Errors                | `thiserror` (libs) + `anyhow` (binary boundary) |
 
 No official Rust SDKs from turbopuffer, Voyage, OpenAI, or Anthropic — all four are HTTP APIs cleanly hit with `reqwest`. For Ollama, the HTTP API at `localhost:11434` is equally straightforward. This is a feature, not a limitation: the `VectorStore` / `Embedder` / `Summarizer` traits stay honest about what they need, and we avoid pulling in SDK crates that may impose their own async runtime or error types.
