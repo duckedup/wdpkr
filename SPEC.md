@@ -51,10 +51,10 @@ Their AI coding agent runs `megagrep search "release commission payments to indi
 | Indexer     | Walks repo, summarizes, embeds, upserts vectors       | `megagrep index` subcommand              |
 | Searcher    | Embeds query, queries store, returns tiered JSON      | `megagrep search` subcommand             |
 | Config      | User-facing config management                          | `megagrep config` subcommand             |
-| Vector store| Stores embeddings, runs ANN search                     | Turbopuffer (interface designed for swap)|
-| Embedder    | Embeds natural-language summaries                      | OpenAI `text-embedding-3-large`          |
+| Vector store| Stores embeddings, runs ANN search                     | Turbopuffer (trait designed for swap)    |
+| Embedder    | Embeds natural-language summaries                      | Voyage `voyage-code-3` (trait designed for swap) |
 | Summarizer  | Generates NL summaries of code chunks                  | Anthropic Claude Haiku                   |
-| Chunker     | Splits files into file-level + symbol-level chunks    | tree-sitter (per-language grammars)      |
+| Chunker     | AST-aware code splitting into file + symbol chunks    | tree-sitter (per-language grammars)      |
 
 ### High-level data flow
 
@@ -93,19 +93,61 @@ This is a deliberate simplification from "namespace per commit." The cost of sta
 - `.gitignore` covers vendored deps, generated code, build artifacts, etc.
 - `.megagrepignore` covers committed-but-noisy files: lockfiles (`go.sum`, `package-lock.json`), generated protobuf/gRPC code, snapshot test outputs, large fixtures. None are gitignored, none are useful for conceptual search, all would dilute retrieval if indexed.
 
-### Granularity: hierarchical
+### Granularity: hierarchical, AST-driven
 
 Two layers of chunks per indexable file (where supported):
 
-| Language          | File-level | Symbol-level |
-|-------------------|------------|--------------|
-| Go                | ✅          | ✅            |
-| Rust              | ✅          | ✅            |
-| TypeScript / JavaScript | ✅    | ✅            |
-| Svelte            | ✅          | ❌            |
-| Everything else   | ✅          | ❌            |
+| Language               | File-level | Symbol-level | tree-sitter grammar          |
+|------------------------|------------|--------------|------------------------------|
+| Go                     | ✅          | ✅            | `tree-sitter-go`             |
+| Rust                   | ✅          | ✅            | `tree-sitter-rust`           |
+| TypeScript / JavaScript| ✅          | ✅            | `tree-sitter-typescript` / `tree-sitter-javascript` |
+| Python                 | ✅          | ✅            | `tree-sitter-python`         |
+| Java                   | ✅          | ✅            | `tree-sitter-java`           |
+| C / C++                | ✅          | ✅            | `tree-sitter-cpp`            |
+| C#                     | ✅          | ✅            | `tree-sitter-c-sharp`        |
+| Svelte                 | ✅          | ❌            | —                            |
+| Everything else        | ✅          | ❌            | —                            |
 
-Symbol-level chunking uses tree-sitter, with grammars per language. Svelte's multi-section structure (script + template + style) doesn't fit the symbol model cleanly; v1 treats `.svelte` files as file-level only. Same fallback for any unsupported language: file-level summary still works fine without a tree-sitter grammar.
+For unsupported languages: file-level summary still works without a grammar. Svelte's multi-section structure (script + template + style) doesn't fit the symbol model cleanly; v1 treats `.svelte` files as file-level only. Adding a new language requires only a tree-sitter grammar crate and a node-type map — the extraction logic is language-agnostic.
+
+### AST extraction strategy
+
+Symbol-level chunking is not "split by line count." It uses tree-sitter to parse the full file AST and extracts **semantically meaningful top-level nodes**. The key insight: IDEs already use ASTs to understand code structure — dependencies, symbol boundaries, docstrings. We should leverage the same parsed structure rather than inventing our own heuristics.
+
+**Extractable node types per language:**
+
+| Language       | Extracted node types                                                                                     |
+|----------------|----------------------------------------------------------------------------------------------------------|
+| Go             | `function_declaration`, `method_declaration`, `type_declaration`, `const_declaration`, `var_declaration`  |
+| Rust           | `function_item`, `impl_item`, `struct_item`, `enum_item`, `trait_item`, `mod_item`, `const_item`         |
+| TypeScript/JS  | `function_declaration`, `class_declaration`, `interface_declaration`, `type_alias_declaration`, `export_statement`, `arrow_function` (named), `method_definition` |
+| Python         | `function_definition`, `class_definition`, `decorated_definition`                                         |
+| Java           | `class_declaration`, `method_declaration`, `interface_declaration`, `enum_declaration`, `constructor_declaration` |
+| C/C++          | `function_definition`, `class_specifier`, `struct_specifier`, `enum_specifier`, `namespace_definition`    |
+| C#             | `class_declaration`, `method_declaration`, `interface_declaration`, `struct_declaration`, `enum_declaration` |
+
+**Extraction walk:**
+
+1. Parse the file into a tree-sitter `Tree`.
+2. Walk the root node's children (top-level declarations only — not recursing into function bodies).
+3. For each child matching a splittable node type, extract it as a symbol chunk with:
+   - `name`: the identifier node's text (e.g., function name)
+   - `kind`: normalized kind (`function`, `method`, `type`, `struct`, `enum`, `trait`, `interface`, `const`)
+   - `lines`: `(start_row, end_row)` from tree-sitter's byte-offset positions
+   - `body`: the full text of the node, including any leading doc comment
+   - `signature`: for functions/methods, just the signature line(s) — used in summaries for cross-referencing
+4. For nodes that are containers (e.g., `impl_item` in Rust, `class_declaration` in Java), recurse one level to extract methods as separate symbol chunks, with the parent as context.
+
+**Doc comment association:** tree-sitter grammars represent doc comments (`///`, `/** */`, `""" """`, `//`) as sibling nodes preceding the declaration they document. The extractor checks the previous sibling of each extracted node; if it's a comment node, it's included in the symbol chunk's body. This is free structured data that dramatically improves summary quality.
+
+**Import/dependency extraction:** At file-level, the AST walk also extracts all import/require/use nodes. These are:
+- Passed to the file-level summarizer as structured context (not just raw text — parsed into `{module, imported_names}` tuples)
+- Stored as metadata on the file-level vector for potential dependency-graph queries in v2
+
+**Oversized symbol handling:** If a single symbol exceeds the summarizer's context window (~50K tokens), the symbol is still treated as one logical chunk for summarization purposes — the summarizer receives the signature + doc comment + a truncated body with a note about truncation. The alternative (splitting a function into arbitrary pieces) produces worse summaries than summarizing a truncated-but-coherent unit.
+
+**Fallback for parse failures:** If tree-sitter fails to parse a file (malformed syntax, grammar bug), the file falls back to file-level-only chunking. Parse failures are logged to stderr but do not block the indexing run. This matches claude-context's approach — AST failure should be transparent and non-fatal.
 
 ### Summarization
 
@@ -128,9 +170,75 @@ This implies a pipeline ordering constraint: **file-level summaries are produced
 
 ### Embedding
 
-- Embed the **summaries**, not the raw code.
-- Because the inputs to the embedder are natural language prose, code-specialized embedders are not necessary. `text-embedding-3-large` handles this well.
-- Same embedder for indexing and querying.
+**Core principle:** embed the **summaries**, not the raw code. Because the inputs to the embedder are natural-language prose (LLM-generated summaries), code-specialized embedders are not strictly necessary — but models trained on code + natural language (like Voyage) still have an edge because our summaries contain identifiers, type names, and domain terms that sit between pure prose and pure code.
+
+Same embedder must be used for indexing and querying. Switching embedders requires a full reindex.
+
+#### Embedder trait
+
+```rust
+#[async_trait]
+pub trait Embedder: Send + Sync {
+    /// Embed a single text string, returning a dense vector.
+    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+
+    /// Embed a batch of texts. Implementations should handle chunking
+    /// against their provider's batch-size limits internally.
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+
+    /// The dimensionality of vectors this embedder produces.
+    /// For providers with fixed dimensions (Voyage, OpenAI known models),
+    /// this is a constant. For Ollama, detected via a probe embed on init.
+    fn dimension(&self) -> usize;
+
+    /// Max input tokens the model accepts. Text exceeding this is
+    /// truncated (with a warning) before embedding.
+    fn max_input_tokens(&self) -> usize;
+
+    /// Provider name for logging and diagnostics (e.g., "voyage", "ollama").
+    fn provider_name(&self) -> &str;
+
+    /// Model identifier for logging and config validation.
+    fn model_name(&self) -> &str;
+}
+```
+
+#### Supported providers
+
+| Provider  | Default model           | Dimensions | Max tokens | Use case                        |
+|-----------|------------------------|------------|------------|----------------------------------|
+| **Voyage**  | `voyage-code-3`      | 1024       | 16,000     | Default. Code-trained model; best fit for code summaries. |
+| **Ollama**  | `nomic-embed-text`   | 768 (auto) | 8,192      | Local/offline. No API costs. Good for eval iteration. |
+| **OpenAI**  | `text-embedding-3-large` | 3072   | 8,191      | Widely available. Fallback if Voyage unavailable. |
+
+**Why `voyage-code-3` as default:** Our summaries are natural language, but they're *code-adjacent* natural language — dense with function names, type identifiers, module paths, and domain terms that sit between pure prose and pure code. `voyage-code-3` is explicitly trained on code and technical content, giving it a vocabulary advantage over general-purpose embedders on exactly this kind of input. It also benchmarks at the top of MTEB code retrieval tasks. The 16K token context is generous for summaries. OpenAI's `text-embedding-3-large` is a solid fallback but has no code-specific training signal.
+
+**Why Ollama support matters:** during development and eval iteration, you're making hundreds of embed calls to test prompt changes. Paying per-call for that iteration loop is wasteful. A local `nomic-embed-text` running on Ollama gives fast, free iteration at the cost of some quality — acceptable for the dev loop, not for production indexing.
+
+#### Provider configuration
+
+```yaml
+# ~/.config/megagrep/config.yaml
+embedder:
+  provider: voyage          # "voyage" | "ollama" | "openai"
+  model: voyage-code-3      # override default model for the provider
+  batch_size: 64            # texts per API call (default: 64)
+```
+
+```bash
+# Env vars (override config file)
+MEGAGREP_EMBED_PROVIDER=voyage
+MEGAGREP_EMBED_MODEL=voyage-code-3
+VOYAGE_API_KEY=...          # provider-specific credential
+OLLAMA_HOST=http://localhost:11434  # Ollama endpoint
+OPENAI_API_KEY=...          # if using OpenAI provider
+```
+
+**Dimension detection:** For Voyage and OpenAI, dimensions are looked up from a hardcoded map of known models (cheap, no API call). For Ollama (where models are user-installed and dimensions vary), the adapter sends a single probe embedding on initialization to detect the dimension. This detected dimension is used when creating the vector store namespace.
+
+**Batch embedding:** The `embed_batch` implementation handles provider-specific batch limits internally. Voyage supports up to 128 texts per call; OpenAI up to 2048; Ollama processes sequentially. The caller doesn't need to know — it passes all texts and the adapter chunks appropriately.
+
+**Text truncation:** If input text exceeds `max_input_tokens`, it's truncated to fit with a warning logged to stderr. This is a safety net, not normal operation — summaries should be sized to fit within the embedder's context window by the summarizer prompt.
 
 ### Change detection: high-water mark
 
@@ -158,7 +266,7 @@ The indexer maintains a single SHA in turbopuffer namespace metadata: the last-s
 
 - Triggered by merge to main via GitHub Actions (or equivalent).
 - `concurrency: { group: megagrep-${repo}, cancel-in-progress: true }` — when a new merge lands, kill any running indexer for stale state. We don't want to write embeddings derived from a SHA that's already been superseded.
-- Auth: `TURBOPUFFER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` injected as secrets.
+- Auth: `TURBOPUFFER_API_KEY`, `VOYAGE_API_KEY`, `ANTHROPIC_API_KEY` injected as secrets. (Substitute `OPENAI_API_KEY` if using OpenAI embedder.)
 
 ---
 
@@ -285,18 +393,252 @@ defaults  →  config file  →  env vars
 
 Later sources override earlier ones.
 
+### Config schema (relevant sections)
+
+```yaml
+# ~/.config/megagrep/config.yaml
+
+store:
+  provider: turbopuffer      # only option in v1
+  # api_key: via TURBOPUFFER_API_KEY env var (never in config file)
+
+embedder:
+  provider: voyage           # "voyage" | "ollama" | "openai"
+  model: voyage-code-3       # override default model for the provider
+  batch_size: 64             # texts per API call
+  # Ollama-specific:
+  # host: http://localhost:11434
+
+summarizer:
+  provider: anthropic        # only option in v1
+  model: claude-haiku-4-5-20251001
+
+chunker:
+  provider: tree-sitter      # only option in v1
+
+default_branch: main
+```
+
+**Env var naming convention:** `MEGAGREP_<COMPONENT>_<KEY>` for megagrep-specific settings (e.g., `MEGAGREP_EMBED_PROVIDER`, `MEGAGREP_EMBED_MODEL`). Provider credentials use the provider's standard env var name (`VOYAGE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_HOST`, `TURBOPUFFER_API_KEY`). This avoids inventing new credential env vars when the ecosystem already has conventions.
+
 ### Pluggable backends
 
-Four interfaces, each with a single v1 implementation:
+Four interfaces with v1 implementations:
 
 ```
-internal/store/        # Vector store interface;       turbopuffer adapter
-internal/embed/        # Embedder interface;           OpenAI adapter
-internal/summarize/    # Summarizer interface;         Anthropic adapter
-internal/chunk/        # Chunker interface;            tree-sitter adapter
+src/store/        # VectorStore trait     → turbopuffer adapter
+src/embed/        # Embedder trait        → voyage, ollama, openai adapters
+src/summarize/    # Summarizer trait      → anthropic adapter
+src/chunk/        # Chunker trait         → tree-sitter adapter
 ```
 
-**Design principle:** define the abstractions from day one, but only ship one implementation of each. The second backend is what surfaces the leaky parts of the first interface; doing it without a real driver is a guessing game and a maintenance burden with no validating users.
+**Design principle:** define the abstractions from day one. Ship one implementation where one is sufficient (store, summarizer, chunker) — the second backend is what surfaces leaky interface assumptions, so building it without a real driver is guesswork. For the embedder, we ship three from the start because the use cases are genuinely distinct (production quality vs. local iteration vs. widely-available fallback) and having multiple implementations validates the trait immediately.
+
+#### VectorStore trait
+
+The vector store abstraction is the most important interface to get right — it constrains what search capabilities the system can expose.
+
+```rust
+#[async_trait]
+pub trait VectorStore: Send + Sync {
+    // ── Namespace lifecycle ──────────────────────────────────────────
+
+    /// Create a namespace (collection/index) for a repository.
+    /// `dimension` is the embedding vector size, determined by the embedder.
+    async fn create_namespace(&self, ns: &Namespace, dimension: usize) -> Result<()>;
+
+    /// Delete a namespace and all its vectors.
+    async fn delete_namespace(&self, ns: &Namespace) -> Result<()>;
+
+    /// Check whether a namespace exists.
+    async fn namespace_exists(&self, ns: &Namespace) -> Result<bool>;
+
+    // ── Metadata ─────────────────────────────────────────────────────
+
+    /// Read opaque metadata attached to the namespace (e.g., HWM SHA).
+    async fn get_metadata(&self, ns: &Namespace) -> Result<NamespaceMetadata>;
+
+    /// Write metadata. Used to persist the high-water mark after indexing.
+    async fn set_metadata(&self, ns: &Namespace, meta: &NamespaceMetadata) -> Result<()>;
+
+    // ── Write ────────────────────────────────────────────────────────
+
+    /// Upsert a batch of documents. Idempotent — re-upserting the same
+    /// ID with different content overwrites. Implementations should handle
+    /// batching against provider limits internally.
+    async fn upsert(&self, ns: &Namespace, docs: &[VectorDocument]) -> Result<UpsertStats>;
+
+    /// Delete documents by ID. Used when files are deleted or re-chunked.
+    async fn delete_by_ids(&self, ns: &Namespace, ids: &[&str]) -> Result<()>;
+
+    /// Delete all documents whose `file_path` matches the given path.
+    /// More ergonomic than tracking IDs for file-level deletes.
+    async fn delete_by_file(&self, ns: &Namespace, file_path: &str) -> Result<()>;
+
+    // ── Search ───────────────────────────────────────────────────────
+
+    /// Nearest-neighbor search over the namespace.
+    async fn search(
+        &self,
+        ns: &Namespace,
+        query_vector: &[f32],
+        opts: &SearchOptions,
+    ) -> Result<Vec<SearchResult>>;
+}
+```
+
+**Supporting types:**
+
+```rust
+/// Identifies a namespace. Derived from the git remote URL (normalized + hashed)
+/// or overridden in config.
+pub struct Namespace(pub String);
+
+/// Metadata stored alongside the namespace — not in the vectors themselves.
+pub struct NamespaceMetadata {
+    /// Last successfully indexed commit SHA.
+    pub hwm_sha: Option<String>,
+    /// Embedder provider + model used to create this namespace.
+    /// Changing embedder requires a full reindex; this field catches the mismatch.
+    pub embedder: Option<String>,
+    /// Arbitrary key-value pairs for future use.
+    pub extra: HashMap<String, String>,
+}
+
+/// A document to be stored in the vector store.
+pub struct VectorDocument {
+    /// Deterministic ID: hash of (file_path, chunk_kind, symbol_name, content_hash).
+    pub id: String,
+    /// The dense embedding vector.
+    pub vector: Vec<f32>,
+    /// The summary text that was embedded (stored for debugging, not searched).
+    pub summary: String,
+
+    // ── Filterable attributes ──
+    pub file_path: String,
+    pub chunk_kind: ChunkKind,       // File | Symbol
+    pub symbol_name: Option<String>, // None for file-level chunks
+    pub symbol_kind: Option<String>, // "function", "struct", "trait", etc.
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+    pub language: Option<String>,
+}
+
+pub enum ChunkKind { File, Symbol }
+
+pub struct SearchOptions {
+    /// Max results to return.
+    pub top_k: usize,
+    /// Filter to a subtree (e.g., "internal/finance/").
+    pub path_prefix: Option<String>,
+    /// Filter by chunk kind.
+    pub chunk_kind: Option<ChunkKind>,
+    /// Filter by language.
+    pub language: Option<String>,
+    /// Minimum similarity score (0.0–1.0). Results below this are dropped.
+    pub min_score: Option<f32>,
+}
+
+pub struct SearchResult {
+    pub id: String,
+    pub score: f32,
+    pub file_path: String,
+    pub chunk_kind: ChunkKind,
+    pub symbol_name: Option<String>,
+    pub symbol_kind: Option<String>,
+    pub summary: String,
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+    pub language: Option<String>,
+}
+
+pub struct UpsertStats {
+    pub upserted: usize,
+    pub skipped: usize,  // already up-to-date (same ID + content hash)
+}
+```
+
+**Why this API shape:**
+
+- **`delete_by_file`** is a first-class operation because the indexer's unit of change detection is the file (via `git diff`). Without it, the indexer would need to track individual chunk IDs per file — an unnecessary bookkeeping burden. Turbopuffer supports attribute filtering on delete; other backends may need to query-then-delete.
+- **`NamespaceMetadata`** stores the HWM and the embedder identity. The embedder field is critical: if a user switches from Voyage to OpenAI, the stored vectors are incompatible. The indexer checks this on startup and refuses incremental indexing if there's a mismatch (requires `--full`).
+- **`SearchOptions` filtering** uses server-side attribute filters (not client-side post-filtering). Turbopuffer supports this natively. Any backend that can't filter server-side should implement it as a post-filter with an over-fetched `top_k`.
+- **No hybrid search in the trait.** BM25 + vector hybrid search is a v2 quality lever. Adding it to the trait now would constrain backend selection (not all stores support BM25 natively). The trait is pure dense vector search; hybrid can be added as an optional extension trait later.
+- **No `list_documents` / `get_by_id` / `count`.** These are admin/debug operations, not part of the hot path. They can be added to a separate `VectorStoreAdmin` trait if needed.
+
+#### Embedder trait
+
+Defined in the [Embedding](#embedding) section above. Three v1 implementations: Voyage (default), Ollama (local), OpenAI (fallback).
+
+#### Summarizer trait
+
+```rust
+#[async_trait]
+pub trait Summarizer: Send + Sync {
+    /// Summarize a file given its content and metadata context.
+    async fn summarize_file(&self, input: &FileSummaryInput) -> Result<String>;
+
+    /// Summarize a symbol given its body and the parent file summary.
+    async fn summarize_symbol(&self, input: &SymbolSummaryInput) -> Result<String>;
+
+    /// Model name for cost tracking and logging.
+    fn model_name(&self) -> &str;
+}
+
+pub struct FileSummaryInput {
+    pub file_path: String,
+    pub content: String,
+    pub imports: Vec<Import>,      // Parsed from AST, not raw text
+    pub language: String,
+}
+
+pub struct SymbolSummaryInput {
+    pub symbol_name: String,
+    pub symbol_kind: String,
+    pub body: String,
+    pub signature: Option<String>,
+    pub doc_comment: Option<String>,
+    pub file_path: String,
+    pub file_summary: String,      // Parent file summary, for context
+}
+```
+
+Single v1 implementation: Anthropic Claude Haiku.
+
+#### Chunker trait
+
+```rust
+pub trait Chunker: Send + Sync {
+    /// Extract chunks from a file. Returns a file-level chunk and
+    /// zero or more symbol-level chunks.
+    fn chunk(&self, file_path: &str, content: &str, language: &str) -> Result<FileChunks>;
+}
+
+pub struct FileChunks {
+    pub file_path: String,
+    pub language: String,
+    pub imports: Vec<Import>,
+    pub file_content: String,          // Full content for file-level summary
+    pub symbols: Vec<SymbolChunk>,     // Empty if no grammar or parse failure
+}
+
+pub struct SymbolChunk {
+    pub name: String,
+    pub kind: String,                  // "function", "method", "struct", etc.
+    pub body: String,                  // Full text including doc comment
+    pub signature: Option<String>,     // First line(s) of declaration
+    pub doc_comment: Option<String>,   // Extracted doc comment text
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+pub struct Import {
+    pub module: String,                // "internal/finance/commission"
+    pub names: Vec<String>,           // ["ReleaseService", "PayeeRecord"]
+}
+```
+
+Single v1 implementation: tree-sitter adapter (described in the [AST extraction strategy](#ast-extraction-strategy) section).
 
 ---
 
@@ -345,12 +687,12 @@ Honest reasoning (the perf claim is more nuanced than it first appears):
 | HTTP                  | `reqwest` with `rustls-tls`            |
 | JSON                  | `serde` + `serde_json`                 |
 | CLI parsing           | `clap` (derive macros)                 |
-| Tree-sitter           | `tree-sitter` + `tree-sitter-{go,rust,typescript,javascript,svelte}` |
+| Tree-sitter           | `tree-sitter` + `tree-sitter-{go,rust,typescript,javascript,python,java,cpp,c-sharp}` |
 | Token counting        | `tiktoken-rs`                          |
 | Bounded parallelism   | `futures::stream::buffer_unordered`    |
 | Errors                | `thiserror` (libs) + `anyhow` (binary boundary) |
 
-No official Rust SDKs from turbopuffer, OpenAI, or Anthropic — all three are HTTP APIs cleanly hit with `reqwest`. This is also good for the abstraction layer: the `Store` / `Embedder` / `Summarizer` traits stay honest about what they need.
+No official Rust SDKs from turbopuffer, Voyage, OpenAI, or Anthropic — all four are HTTP APIs cleanly hit with `reqwest`. For Ollama, the HTTP API at `localhost:11434` is equally straightforward. This is a feature, not a limitation: the `VectorStore` / `Embedder` / `Summarizer` traits stay honest about what they need, and we avoid pulling in SDK crates that may impose their own async runtime or error types.
 
 ---
 
@@ -394,6 +736,7 @@ These are starting values, not architectural commitments:
 | `--symbols-per-file`             | 3            | Eval + manual review   |
 | `--concurrency`                  | 8            | Indexer wallclock perf |
 | `--max-cost` default             | $50          | Real per-merge costs   |
+| Embedder batch size              | 64           | Provider rate limits + throughput |
 | Big-file roll-up threshold       | ~50K tokens  | Haiku context window utilization |
 | HWM advancement success threshold| ~95%         | Real failure patterns  |
 | Summarizer prompts               | (TBD)        | Eval iteration         |
@@ -408,8 +751,8 @@ This list is part of the spec because "we considered it and chose not to do it" 
 - **No commit-keyed namespaces.** Single namespace per repo, updated in place. Considered and rejected: the cost of statelessness (no historical search) wasn't worth the operational complexity.
 - **No `copy_from_namespace` usage.** [Cursor uses this](https://turbopuffer.com/customers/cursor) for cross-namespace embedding reuse and for fast onboarding; with our single-namespace-per-repo model it's irrelevant.
 - **No Merkle-tree fingerprinting.** [Cursor's secure-indexing approach](https://cursor.com/blog/secure-codebase-indexing) handles "find any namespace similar enough to this working tree" via per-file content hashing. The HWM-based ancestor approach handles ~95% of practical cases at a fraction of the complexity.
-- **No raw-code embeddings.** We embed LLM summaries instead. Decision driven by not having a code-trained embedding model; revisit if Voyage code-3 or similar shows substantially better behavior in eval.
-- **No hybrid BM25 + vector search.** Turbopuffer supports it natively, but exposing it through the abstraction interface adds complexity for v1. Pure vector for now; hybrid is a v2 candidate if eval shows lexical matching helps.
+- **No raw-code embeddings.** We embed LLM summaries instead. Even with `voyage-code-3` (a code-trained model) as our default embedder, the summary-based approach closes the vocabulary gap between user-story queries and code identifiers more effectively than embedding raw code directly. The model is good at embedding code-adjacent prose; that doesn't mean raw code is the right input. Revisit if eval shows a dual-embedding approach (summaries + raw code in separate vectors) produces meaningfully better recall.
+- **No hybrid BM25 + vector search.** Turbopuffer supports it natively, and claude-context uses it by default (BM25 + dense with RRF reranking). We deliberately omit it from the `VectorStore` trait in v1 — not all backends support BM25, and adding it constrains backend portability. Pure dense vector search for now; hybrid is a v2 candidate behind an optional extension trait if eval shows lexical matching helps.
 - **No re-ranking layer.** Single-stage vector retrieval. Re-ranking with a cross-encoder is a v2 quality lever.
 - **No reverse-import context for file summaries.** Highest-quality file-level signal but requires a full dep-graph pre-pass. Deferred to v2.
 - **No symbol-level chunking for Svelte.** File-level only. The `tree-sitter-svelte` grammar is meaningfully less mature than the others, and Svelte components are file-scoped anyway. Revisit if v1 usage shows real demand.
@@ -417,8 +760,8 @@ This list is part of the spec because "we considered it and chose not to do it" 
 - **No pagination on search results.** Small `k`, refine the query if more is needed.
 - **No stdin support for queries.** Positional arg only. Trivial to add later.
 - **No `--rank-by` knob.** Ranking is fixed: file-summary score for file ordering, symbol score for within-file symbol ordering.
-- **No additional vector store backends in v1.** Interfaces are designed for swap; only turbopuffer is implemented. Add backends when there's a real second user driving the requirement.
-- **No additional embedder/summarizer providers in v1.** Same rationale.
+- **No additional vector store backends in v1.** The `VectorStore` trait is designed for swap; only the turbopuffer adapter is implemented. Add backends (Qdrant, Milvus, local FAISS) when there's a real second user driving the requirement.
+- **No additional summarizer providers in v1.** Anthropic Haiku only. The `Summarizer` trait supports swap, but we're not building adapters for providers we don't use. (Embedder has three providers because the use cases are genuinely distinct — production, local dev, and fallback.)
 - **No MCP server integration.** The CLI shell-out is the integration point. Auth stays in env vars on the developer's machine.
 - **No per-repo `megagrep.yaml`.** All user config lives in `~/.config/megagrep/`. `.megagrepignore` is the only repo-resident config file.
 - **No Claude Code plugin packaging in v1.** `megagrep init` writes a `CLAUDE.md` section, which is sufficient for internal use. A proper plugin is the distribution story for external adoption — v2.
@@ -427,11 +770,13 @@ This list is part of the spec because "we considered it and chose not to do it" 
 
 ## References
 
+- **claude-context** (Zilliz): https://github.com/zilliztech/claude-context — MCP-based codebase indexer using Milvus/Zilliz Cloud. Studied for interface design, AST chunking patterns, and embedding provider abstraction. Key differences from megagrep: embeds raw code (not summaries), uses MCP (not CLI), Milvus-specific (not backend-agnostic), no LLM summarization layer. Their hybrid search (BM25 + dense with RRF) is a strong v2 candidate for us.
 - Cursor + Turbopuffer customer story: https://turbopuffer.com/customers/cursor — context for the architectural pattern, the 23.5% benchmark improvement, and `copy_from_namespace`.
 - Cursor's semantic search benchmark write-up: https://cursor.com/blog/semsearch — referenced from the Turbopuffer page.
 - Cursor's secure codebase indexing: https://cursor.com/blog/secure-codebase-indexing — Merkle-tree fingerprinting approach we considered and rejected for v1.
 - Turbopuffer documentation: https://turbopuffer.com/docs — namespace model, hybrid search, write semantics.
-- tree-sitter: https://tree-sitter.github.io — incremental parsing library used for symbol-level chunking. Originally created by Max Brunsfeld.
+- **Voyage AI embeddings:** https://docs.voyageai.com/docs/embeddings — `voyage-code-3` documentation, benchmarks, and API reference.
+- tree-sitter: https://tree-sitter.github.io — incremental parsing library used for AST-based symbol extraction. Rust crate is the canonical implementation.
 - XDG Base Directory Specification: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html — for `~/.config/megagrep/` placement.
 - CLI conventions reference: `gh`, `gcloud`, `aws` — config-in-`~/.config`-with-env-overrides pattern.
 
@@ -443,8 +788,11 @@ Items that warrant feedback before implementation begins:
 
 1. The summarizer prompts themselves — file-level and symbol-level — need to be drafted and iterated against the eval set. Quality depends heavily on these and they're not yet written.
 2. The seed eval cases (10 to start) — needs human selection from real Linear tickets, with file annotations. This is the bootstrapping work that gates measuring everything else.
-3. Bootstrap cost on the largest Dayforward repo — to be confirmed via `megagrep index --dry-run` on real codebase before committing to the first full index.
-4. Whether the v1 language list (Go, Rust, TS/JS, Svelte) is complete for Dayforward — confirmed at planning time; verify nothing was missed.
+3. Bootstrap cost on the largest Dayforward repo — to be confirmed via `megagrep index --dry-run` on real codebase before committing to the first full index. With Voyage pricing (`voyage-code-3` at ~$0.06/1M tokens) this should be significantly cheaper than OpenAI.
+4. Whether the v1 language list (Go, Rust, TS/JS, Python, Java, C/C++, C#, Svelte) covers Dayforward's stack — the expanded list adds Python, Java, C/C++, and C# over the original plan.
+5. **`voyage-code-3` vs `voyage-3-large` for summary embeddings** — `voyage-code-3` is trained on code and should handle our code-adjacent summaries well, but `voyage-3-large` may outperform on pure natural-language queries. Needs eval comparison before locking in.
+6. **Turbopuffer attribute filter support** — the `VectorStore` trait assumes server-side filtering by `file_path`, `chunk_kind`, `language`, etc. Verify that turbopuffer's attribute filtering covers these use cases efficiently, or adjust the trait to make filtering optional.
+7. **AST node-type coverage validation** — the splittable node types per language (listed in "AST extraction strategy") are based on common patterns. Before shipping, validate against real Dayforward code that the extraction captures the right granularity — not too coarse (whole modules) or too fine (individual fields).
 
 ---
 
