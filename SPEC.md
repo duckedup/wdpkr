@@ -35,7 +35,6 @@ Their AI coding agent runs `megagrep search "release commission payments to indi
 
 ### Non-goals (v1) — see also "Explicit punts" at end
 
-- Not a grep replacement
 - Not authoritative about current code state — the agent reads files for ground truth
 - Not retaining historical commit indexes — single namespace per repo, updated in place
 - Not implementing every backend the abstractions allow for
