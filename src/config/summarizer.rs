@@ -1,4 +1,4 @@
-use super::{FileConfig, env_or, file_or};
+use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved, resolved_default};
 use anyhow::{Result, bail};
 
 pub struct SummarizerConfig {
@@ -7,23 +7,47 @@ pub struct SummarizerConfig {
     pub api_key: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SummarizerSources {
+    pub provider: Source,
+    pub model: Source,
+    pub api_key: Source,
+}
+
 impl SummarizerConfig {
     pub fn from_env(file: &Option<FileConfig>) -> Self {
+        Self::resolve(file).0
+    }
+
+    pub fn resolve(file: &Option<FileConfig>) -> (Self, SummarizerSources) {
         let f = file.as_ref().and_then(|f| f.summarizer.as_ref());
-        Self {
-            provider: env_or(
-                "MEGAGREP_SUMMARIZER_PROVIDER",
-                file_or(f.and_then(|s| s.provider.clone()), "anthropic".into()),
+
+        let provider: Resolved<String> = env_or_resolved(
+            "MEGAGREP_SUMMARIZER_PROVIDER",
+            file_or_resolved(f.and_then(|s| s.provider.clone()), "anthropic".into()),
+        );
+        let model: Resolved<String> = env_or_resolved(
+            "MEGAGREP_SUMMARIZER_MODEL",
+            file_or_resolved(
+                f.and_then(|s| s.model.clone()),
+                "claude-haiku-4-5-20251001".into(),
             ),
-            model: env_or(
-                "MEGAGREP_SUMMARIZER_MODEL",
-                file_or(
-                    f.and_then(|s| s.model.clone()),
-                    "claude-haiku-4-5-20251001".into(),
-                ),
-            ),
-            api_key: env_or("ANTHROPIC_API_KEY", String::new()),
-        }
+        );
+        let api_key: Resolved<String> =
+            env_or_resolved("ANTHROPIC_API_KEY", resolved_default(String::new()));
+
+        (
+            Self {
+                provider: provider.value,
+                model: model.value,
+                api_key: api_key.value,
+            },
+            SummarizerSources {
+                provider: provider.source,
+                model: model.source,
+                api_key: api_key.source,
+            },
+        )
     }
 
     /// Mirror of `EmbedConfig::validate`: the indexer must hit the
@@ -123,6 +147,46 @@ mod tests {
         set_env("ANTHROPIC_API_KEY", "key-abc");
         let cfg = SummarizerConfig::from_env(&None);
         assert!(cfg.validate().is_ok());
+        clear_env();
+    }
+
+    // ── Source attribution ────────────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn resolve_marks_default_when_no_input() {
+        clear_env();
+        let (_, sources) = SummarizerConfig::resolve(&None);
+        assert_eq!(sources.provider, Source::Default);
+        assert_eq!(sources.model, Source::Default);
+        assert_eq!(sources.api_key, Source::Default);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_marks_file_when_file_only() {
+        clear_env();
+        let file = FileConfig {
+            summarizer: Some(FileSummarizerConfig {
+                model: Some("claude-opus-4-7".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, sources) = SummarizerConfig::resolve(&Some(file));
+        assert_eq!(sources.model, Source::File);
+        assert_eq!(sources.provider, Source::Default);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_marks_env_when_env_set() {
+        clear_env();
+        set_env("MEGAGREP_SUMMARIZER_MODEL", "claude-sonnet-4-6");
+        set_env("ANTHROPIC_API_KEY", "k");
+        let (_, sources) = SummarizerConfig::resolve(&None);
+        assert_eq!(sources.model, Source::Env("MEGAGREP_SUMMARIZER_MODEL"));
+        assert_eq!(sources.api_key, Source::Env("ANTHROPIC_API_KEY"));
         clear_env();
     }
 }

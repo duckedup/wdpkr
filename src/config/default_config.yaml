@@ -1,0 +1,23 @@
+# ~/.config/megagrep/config.yaml — for local dev use.
+# Every field is optional. Env vars override all values here.
+# Credentials (API keys) should be set via env vars, not this file.
+
+store:
+  provider: turbopuffer
+
+embedder:
+  provider: voyage
+  model: voyage-code-3
+  batch_size: 64
+  # ollama_host: http://localhost:11434
+
+summarizer:
+  provider: anthropic
+  model: claude-haiku-4-5-20251001
+
+indexer:
+  # namespace: ""             # auto-derived from git remote if empty
+  default_branch: main
+  concurrency: 8
+  max_cost: 50
+  hwm_success_threshold: 0.95

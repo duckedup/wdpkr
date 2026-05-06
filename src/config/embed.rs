@@ -1,4 +1,4 @@
-use super::{FileConfig, env_or, file_or};
+use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved, resolved_default};
 use anyhow::{Result, bail};
 
 pub struct EmbedConfig {
@@ -11,45 +11,76 @@ pub struct EmbedConfig {
     pub ollama_host: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct EmbedSources {
+    pub provider: Source,
+    pub model: Source,
+    pub batch_size: Source,
+    pub voyage_api_key: Source,
+    pub openai_api_key: Source,
+    pub ollama_host: Source,
+}
+
 impl EmbedConfig {
     pub fn from_env(file: &Option<FileConfig>) -> Self {
+        Self::resolve(file).0
+    }
+
+    pub fn resolve(file: &Option<FileConfig>) -> (Self, EmbedSources) {
         let f = file.as_ref().and_then(|f| f.embedder.as_ref());
 
-        let provider = env_or(
+        let provider: Resolved<String> = env_or_resolved(
             "MEGAGREP_EMBED_PROVIDER",
-            file_or(f.and_then(|e| e.provider.clone()), "voyage".into()),
+            file_or_resolved(f.and_then(|e| e.provider.clone()), "voyage".into()),
         );
 
         // Default model is provider-derived: setting MEGAGREP_EMBED_PROVIDER
-        // alone must yield a sensible model for that provider — see SPEC §
-        // EmbedConfig.
-        let default_model = match provider.as_str() {
+        // alone must yield a sensible model for that provider.
+        let default_model = match provider.value.as_str() {
             "voyage" => "voyage-code-3",
             "ollama" => "nomic-embed-text",
             "openai" => "text-embedding-3-large",
             _ => "voyage-code-3",
         };
 
-        Self {
-            provider: provider.clone(),
-            model: env_or(
-                "MEGAGREP_EMBED_MODEL",
-                file_or(f.and_then(|e| e.model.clone()), default_model.into()),
+        let model: Resolved<String> = env_or_resolved(
+            "MEGAGREP_EMBED_MODEL",
+            file_or_resolved(f.and_then(|e| e.model.clone()), default_model.into()),
+        );
+        let batch_size: Resolved<usize> = env_or_resolved(
+            "MEGAGREP_EMBED_BATCH_SIZE",
+            file_or_resolved(f.and_then(|e| e.batch_size), 64),
+        );
+        let voyage_api_key: Resolved<String> =
+            env_or_resolved("VOYAGE_API_KEY", resolved_default(String::new()));
+        let openai_api_key: Resolved<String> =
+            env_or_resolved("OPENAI_API_KEY", resolved_default(String::new()));
+        let ollama_host: Resolved<String> = env_or_resolved(
+            "OLLAMA_HOST",
+            file_or_resolved(
+                f.and_then(|e| e.ollama_host.clone()),
+                "http://localhost:11434".into(),
             ),
-            batch_size: env_or(
-                "MEGAGREP_EMBED_BATCH_SIZE",
-                file_or(f.and_then(|e| e.batch_size), 64),
-            ),
-            voyage_api_key: env_or("VOYAGE_API_KEY", String::new()),
-            openai_api_key: env_or("OPENAI_API_KEY", String::new()),
-            ollama_host: env_or(
-                "OLLAMA_HOST",
-                file_or(
-                    f.and_then(|e| e.ollama_host.clone()),
-                    "http://localhost:11434".into(),
-                ),
-            ),
-        }
+        );
+
+        (
+            Self {
+                provider: provider.value.clone(),
+                model: model.value,
+                batch_size: batch_size.value,
+                voyage_api_key: voyage_api_key.value,
+                openai_api_key: openai_api_key.value,
+                ollama_host: ollama_host.value,
+            },
+            EmbedSources {
+                provider: provider.source,
+                model: model.source,
+                batch_size: batch_size.source,
+                voyage_api_key: voyage_api_key.source,
+                openai_api_key: openai_api_key.source,
+                ollama_host: ollama_host.source,
+            },
+        )
     }
 
     /// Validate that the selected provider's required credential is set.
@@ -230,6 +261,50 @@ mod tests {
         let cfg = EmbedConfig::from_env(&None);
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("OPENAI_API_KEY"));
+        clear_env();
+    }
+
+    // ── Source attribution ────────────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn resolve_marks_default_for_every_field_when_no_input() {
+        clear_env();
+        let (_, sources) = EmbedConfig::resolve(&None);
+        assert_eq!(sources.provider, Source::Default);
+        assert_eq!(sources.model, Source::Default);
+        assert_eq!(sources.batch_size, Source::Default);
+        assert_eq!(sources.ollama_host, Source::Default);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_marks_file_when_file_only() {
+        clear_env();
+        let file = FileConfig {
+            embedder: Some(FileEmbedConfig {
+                provider: Some("openai".into()),
+                batch_size: Some(16),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, sources) = EmbedConfig::resolve(&Some(file));
+        assert_eq!(sources.provider, Source::File);
+        assert_eq!(sources.batch_size, Source::File);
+        // model not in file → provider-derived default → Source::Default
+        assert_eq!(sources.model, Source::Default);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_marks_env_when_env_set() {
+        clear_env();
+        set_env("MEGAGREP_EMBED_PROVIDER", "ollama");
+        set_env("MEGAGREP_EMBED_BATCH_SIZE", "256");
+        let (_, sources) = EmbedConfig::resolve(&None);
+        assert_eq!(sources.provider, Source::Env("MEGAGREP_EMBED_PROVIDER"));
+        assert_eq!(sources.batch_size, Source::Env("MEGAGREP_EMBED_BATCH_SIZE"));
         clear_env();
     }
 }
