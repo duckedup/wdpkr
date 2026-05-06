@@ -1,0 +1,21 @@
+[package]
+name = "megagrep"
+version = "0.1.0"
+edition = "2021"
+description = "Conceptual codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "megagrep"
+path = "src/lib.rs"
+
+[[bin]]
+name = "megagrep"
+path = "src/main.rs"
+
+[dependencies]
+# Per-module dependencies will be added as implementation progresses.
+# See SPEC.md "Stack" table for the planned crate set.
+
+[dev-dependencies]
