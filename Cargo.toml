@@ -1,7 +1,8 @@
 [package]
 name = "megagrep"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.95"
 description = "Conceptual codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
 license = "MIT OR Apache-2.0"
 publish = false
@@ -15,7 +16,15 @@ name = "megagrep"
 path = "src/main.rs"
 
 [dependencies]
-# Per-module dependencies will be added as implementation progresses.
-# See SPEC.md "Stack" table for the planned crate set.
+anyhow = "1"
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 
 [dev-dependencies]
+serial_test = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
