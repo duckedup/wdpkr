@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "megagrep",
+  "project_id": "4a2b258e-bfba-4cd1-928c-52cf72771896"
+}
