@@ -9,10 +9,12 @@
 //!
 //! - **Fixture helpers** (this file): `sample_document`, `sample_result` —
 //!   reduce boilerplate in tests that need realistic-looking data.
-//! - **Mock VectorStore** (`mock_store.rs`, issue megagrep-dno): in-memory,
-//!   deterministic, verifiable.
+//! - **Mock VectorStore** (`mock_store.rs`): in-memory, deterministic,
+//!   real cosine similarity for faithful search ranking.
 //! - **Mock Embedder** (`mock_embed.rs`, issue megagrep-zog): deterministic
 //!   vectors for reproducible search tests.
+
+pub mod mock_store;
 
 use crate::store::{ChunkKind, SearchResult, VectorDocument};
 
