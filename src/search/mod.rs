@@ -3,7 +3,9 @@
 //! The search module does NOT depend on the CLI — it receives a
 //! [`SearchParams`] struct and returns a [`SearchReport`]. The CLI layer
 //! constructs `SearchParams` from clap's `SearchArgs` and serializes the
-//! report to stdout.
+//! report to stdout via [`output::render_json`] or [`output::render_pretty`].
+
+pub mod output;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
