@@ -14,6 +14,7 @@
 //! - **Mock Embedder** (`mock_embed.rs`, issue megagrep-zog): deterministic
 //!   vectors for reproducible search tests.
 
+pub mod mock_embed;
 pub mod mock_store;
 
 use crate::store::{ChunkKind, SearchResult, VectorDocument};
