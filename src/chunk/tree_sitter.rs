@@ -1,0 +1,470 @@
+//! Tree-sitter-based [`Chunker`] implementation.
+//!
+//! Generic AST walker that uses per-language configs from `languages.rs`
+//! to extract symbol chunks. Handles doc-comment association, import
+//! extraction, container recursion (one level for methods inside impl
+//! blocks / classes), and graceful fallback on parse failure.
+
+use tree_sitter::{Node, Parser};
+
+use super::languages::{self, LanguageConfig};
+use super::{Chunker, FileChunks, Import, SymbolChunk};
+
+pub struct TreeSitterChunker;
+
+impl TreeSitterChunker {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for TreeSitterChunker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Chunker for TreeSitterChunker {
+    fn chunk(&self, file_path: &str, content: &str, language: &str) -> anyhow::Result<FileChunks> {
+        let config = languages::get_config(language);
+
+        let (imports, symbols) = match config {
+            Some(cfg) => {
+                let mut parser = Parser::new();
+                parser
+                    .set_language(&cfg.ts_language.into())
+                    .map_err(|e| anyhow::anyhow!("failed to set language for {language}: {e}"))?;
+
+                match parser.parse(content, None) {
+                    Some(tree) => {
+                        if tree.root_node().has_error() {
+                            eprintln!(
+                                "warning: parse errors in {file_path}, extracting what we can"
+                            );
+                        }
+                        extract_all(&tree.root_node(), content, &cfg)
+                    }
+                    None => {
+                        eprintln!("warning: tree-sitter failed to parse {file_path}");
+                        (vec![], vec![])
+                    }
+                }
+            }
+            None => (vec![], vec![]),
+        };
+
+        Ok(FileChunks {
+            file_path: file_path.to_string(),
+            language: language.to_string(),
+            file_content: content.to_string(),
+            imports,
+            symbols,
+        })
+    }
+}
+
+fn extract_all(
+    root: &Node,
+    source: &str,
+    config: &LanguageConfig,
+) -> (Vec<Import>, Vec<SymbolChunk>) {
+    let mut imports = Vec::new();
+    let mut symbols = Vec::new();
+
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        let kind = child.kind();
+
+        if config.import_types.contains(&kind)
+            && let Some(import) = extract_import(&child, source)
+        {
+            imports.push(import);
+        }
+
+        if config.symbol_types.contains(&kind)
+            && let Some(sym) = extract_symbol(&child, source, config)
+        {
+            symbols.push(sym);
+        }
+
+        if config.container_types.contains(&kind) {
+            // Methods live inside the body field of the container (e.g.
+            // declaration_list for Rust impl, class_body for Java/TS,
+            // block for Python). Fall back to the container itself.
+            let body = child.child_by_field_name("body").unwrap_or(child);
+            let mut inner_cursor = body.walk();
+            for inner_child in body.children(&mut inner_cursor) {
+                let inner_kind = inner_child.kind();
+                let is_extractable = config.symbol_types.contains(&inner_kind)
+                    || matches!(
+                        inner_kind,
+                        "function_item"
+                            | "method_declaration"
+                            | "method_definition"
+                            | "function_definition"
+                            | "constructor_declaration"
+                    );
+                if is_extractable && let Some(sym) = extract_symbol(&inner_child, source, config) {
+                    symbols.push(sym);
+                }
+            }
+        }
+    }
+
+    (imports, symbols)
+}
+
+fn extract_symbol(node: &Node, source: &str, config: &LanguageConfig) -> Option<SymbolChunk> {
+    let src = source.as_bytes();
+
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src).ok())
+        .unwrap_or_default()
+        .to_string();
+
+    if name.is_empty() && node.kind() != "export_statement" && node.kind() != "decorated_definition"
+    {
+        return None;
+    }
+
+    let body = node.utf8_text(src).ok()?.to_string();
+    let kind = normalize_kind(node.kind());
+    let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
+
+    let signature = extract_signature(node, source);
+
+    let doc_comment = node
+        .prev_sibling()
+        .filter(|sib| config.comment_types.contains(&sib.kind()))
+        .and_then(|sib| sib.utf8_text(src).ok())
+        .map(|s| s.to_string());
+
+    let display_name = if name.is_empty() {
+        body.lines()
+            .next()
+            .unwrap_or("(anonymous)")
+            .trim()
+            .chars()
+            .take(60)
+            .collect()
+    } else {
+        name
+    };
+
+    Some(SymbolChunk {
+        name: display_name,
+        kind: kind.to_string(),
+        body,
+        signature,
+        doc_comment,
+        start_line,
+        end_line,
+    })
+}
+
+fn extract_signature(node: &Node, source: &str) -> Option<String> {
+    if let Some(body_node) = node
+        .child_by_field_name("body")
+        .or_else(|| node.child_by_field_name("block"))
+    {
+        let sig_start = node.start_byte();
+        let sig_end = body_node.start_byte();
+        if sig_end > sig_start {
+            let sig = &source[sig_start..sig_end];
+            return Some(sig.trim_end().to_string());
+        }
+    }
+    source[node.start_byte()..node.end_byte()]
+        .lines()
+        .next()
+        .map(|l| l.trim().to_string())
+}
+
+fn extract_import(node: &Node, source: &str) -> Option<Import> {
+    let text = node.utf8_text(source.as_bytes()).ok()?.trim().to_string();
+    Some(Import {
+        module: text,
+        names: vec![],
+    })
+}
+
+fn normalize_kind(node_type: &str) -> &str {
+    match node_type {
+        "function_declaration" | "function_definition" | "function_item" => "function",
+        "method_declaration" | "method_definition" => "method",
+        "struct_item" | "struct_specifier" | "struct_declaration" => "struct",
+        "enum_item" | "enum_specifier" | "enum_declaration" => "enum",
+        "trait_item" => "trait",
+        "interface_declaration" => "interface",
+        "class_declaration" | "class_specifier" | "class_definition" => "class",
+        "type_declaration" | "type_alias_declaration" | "type_item" => "type",
+        "const_item" | "const_declaration" => "const",
+        "mod_item" => "module",
+        "namespace_definition" => "namespace",
+        "impl_item" => "impl",
+        "constructor_declaration" => "constructor",
+        "var_declaration" | "lexical_declaration" => "var",
+        "decorated_definition" => "function",
+        "export_statement" => "export",
+        "static_item" => "static",
+        "declaration" => "declaration",
+        _ => node_type,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(source: &str, language: &str) -> FileChunks {
+        TreeSitterChunker::new()
+            .chunk("test.rs", source, language)
+            .unwrap()
+    }
+
+    // ── Rust ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn rust_extracts_function() {
+        let src = r#"
+fn hello() {
+    println!("hi");
+}
+"#;
+        let chunks = chunk(src, "rust");
+        assert_eq!(chunks.symbols.len(), 1);
+        assert_eq!(chunks.symbols[0].name, "hello");
+        assert_eq!(chunks.symbols[0].kind, "function");
+    }
+
+    #[test]
+    fn rust_extracts_struct_and_enum() {
+        let src = r#"
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+pub enum Color {
+    Red,
+    Green,
+    Blue,
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Point"));
+        assert!(names.contains(&"Color"));
+    }
+
+    #[test]
+    fn rust_extracts_impl_methods() {
+        let src = r#"
+struct Foo;
+
+impl Foo {
+    fn bar(&self) -> i32 {
+        42
+    }
+
+    fn baz(&self) {}
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Foo"), "struct: {names:?}");
+        assert!(names.contains(&"bar"), "method bar: {names:?}");
+        assert!(names.contains(&"baz"), "method baz: {names:?}");
+    }
+
+    #[test]
+    fn rust_extracts_doc_comment() {
+        let src = r#"
+/// This is a documented function.
+fn documented() {}
+"#;
+        let chunks = chunk(src, "rust");
+        assert_eq!(chunks.symbols.len(), 1);
+        assert!(chunks.symbols[0].doc_comment.is_some());
+        assert!(
+            chunks.symbols[0]
+                .doc_comment
+                .as_ref()
+                .unwrap()
+                .contains("documented function")
+        );
+    }
+
+    #[test]
+    fn rust_extracts_use_imports() {
+        let src = r#"
+use std::collections::HashMap;
+use anyhow::{Result, bail};
+
+fn main() {}
+"#;
+        let chunks = chunk(src, "rust");
+        assert_eq!(chunks.imports.len(), 2);
+        assert!(chunks.imports[0].module.contains("HashMap"));
+        assert!(chunks.imports[1].module.contains("anyhow"));
+    }
+
+    #[test]
+    fn rust_extracts_trait() {
+        let src = r#"
+pub trait Drawable {
+    fn draw(&self);
+    fn area(&self) -> f64;
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Drawable"));
+    }
+
+    #[test]
+    fn rust_line_numbers_are_1_based() {
+        let src = "fn first() {}\nfn second() {}";
+        let chunks = chunk(src, "rust");
+        assert_eq!(chunks.symbols[0].start_line, 1);
+        assert_eq!(chunks.symbols[1].start_line, 2);
+    }
+
+    #[test]
+    fn rust_signature_excludes_body() {
+        let src = r#"
+pub fn process(input: &str) -> Result<()> {
+    Ok(())
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let sig = chunks.symbols[0].signature.as_ref().unwrap();
+        assert!(sig.contains("pub fn process"), "sig: {sig}");
+        assert!(!sig.contains("Ok(())"), "sig should exclude body: {sig}");
+    }
+
+    // ── Go ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn go_extracts_function() {
+        let src = r#"
+package main
+
+func Hello() string {
+    return "hi"
+}
+"#;
+        let chunks = chunk(src, "go");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Hello"), "got: {names:?}");
+    }
+
+    #[test]
+    fn go_extracts_imports() {
+        let src = r#"
+package main
+
+import "fmt"
+
+func main() {}
+"#;
+        let chunks = chunk(src, "go");
+        assert!(!chunks.imports.is_empty());
+    }
+
+    // ── Python ────────────────────────────────────────────────────────
+
+    #[test]
+    fn python_extracts_function_and_class() {
+        let src = r#"
+def greet(name):
+    return f"Hello {name}"
+
+class Person:
+    def __init__(self, name):
+        self.name = name
+"#;
+        let chunks = chunk(src, "python");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"greet"), "got: {names:?}");
+        assert!(names.contains(&"Person"), "got: {names:?}");
+    }
+
+    #[test]
+    fn python_extracts_methods_from_class() {
+        let src = r#"
+class Calculator:
+    def add(self, a, b):
+        return a + b
+
+    def multiply(self, a, b):
+        return a * b
+"#;
+        let chunks = chunk(src, "python");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Calculator"), "got: {names:?}");
+        assert!(names.contains(&"add"), "got: {names:?}");
+        assert!(names.contains(&"multiply"), "got: {names:?}");
+    }
+
+    // ── TypeScript ────────────────────────────────────────────────────
+
+    #[test]
+    fn typescript_extracts_function_and_interface() {
+        let src = r#"
+interface User {
+    name: string;
+    age: number;
+}
+
+function greet(user: User): string {
+    return `Hello ${user.name}`;
+}
+"#;
+        let chunks = chunk(src, "typescript");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"User"), "got: {names:?}");
+        assert!(names.contains(&"greet"), "got: {names:?}");
+    }
+
+    // ── Java ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn java_extracts_class_and_methods() {
+        let src = r#"
+public class Calculator {
+    public int add(int a, int b) {
+        return a + b;
+    }
+
+    public int multiply(int a, int b) {
+        return a * b;
+    }
+}
+"#;
+        let chunks = chunk(src, "java");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Calculator"), "got: {names:?}");
+        assert!(names.contains(&"add"), "got: {names:?}");
+        assert!(names.contains(&"multiply"), "got: {names:?}");
+    }
+
+    // ── Fallback ──────────────────────────────────────────────────────
+
+    #[test]
+    fn unknown_language_returns_file_only() {
+        let chunks = chunk("some content", "brainfuck");
+        assert!(chunks.symbols.is_empty());
+        assert!(chunks.imports.is_empty());
+        assert_eq!(chunks.file_content, "some content");
+    }
+
+    #[test]
+    fn malformed_code_still_returns_file_content() {
+        let src = "fn broken( {{{{{ this is not valid rust";
+        let chunks = chunk(src, "rust");
+        assert_eq!(chunks.file_content, src);
+    }
+}

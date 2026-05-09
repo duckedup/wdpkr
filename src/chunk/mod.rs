@@ -8,6 +8,9 @@
 //! Implementation tracks root `SPEC.md` § Chunker trait and § AST
 //! extraction strategy.
 
+pub mod languages;
+pub mod tree_sitter;
+
 /// A chunker parses source files into a file-level chunk and zero or more
 /// symbol-level chunks. The trait is synchronous — parsing is CPU-bound
 /// and fast enough to not warrant async.
