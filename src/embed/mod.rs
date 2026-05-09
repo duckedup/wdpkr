@@ -44,6 +44,18 @@ pub fn embedder_identity(embedder: &dyn Embedder) -> String {
     format!("{}/{}", embedder.provider_name(), embedder.model_name())
 }
 
+/// Construct an [`Embedder`] from the resolved config. Dispatches on
+/// `config.provider`. Returns an error if the provider is not yet
+/// implemented — real adapters (Voyage, Ollama, OpenAI) plug in here
+/// when their issues land.
+pub fn build_embedder(config: &crate::config::EmbedConfig) -> Result<Box<dyn Embedder>> {
+    anyhow::bail!(
+        "embedder provider '{}' is not yet implemented (model: {})",
+        config.provider,
+        config.model,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
