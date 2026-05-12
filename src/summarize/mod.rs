@@ -12,6 +12,7 @@
 
 pub mod anthropic;
 pub mod prompts;
+pub mod rollup;
 
 use anyhow::Result;
 use async_trait::async_trait;

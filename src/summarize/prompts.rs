@@ -69,6 +69,29 @@ pub fn symbol_user_message(input: &SymbolSummaryInput) -> String {
     msg
 }
 
+/// Build the user message for a roll-up file summary (used when the file
+/// exceeds the token threshold and can't be passed directly).
+pub fn rollup_user_message(
+    file_path: &str,
+    language: &str,
+    symbol_summaries: &[(&str, &str)],
+) -> String {
+    let mut msg = format!(
+        "Summarize this {language} file in 2-4 sentences based on its constituent symbols.\n\n\
+         File: {file_path}\n\n\
+         This file is too large to summarize directly. \
+         Here are summaries of its individual symbols:\n\n"
+    );
+    for (name, summary) in symbol_summaries {
+        msg.push_str(&format!("- {name}: {summary}\n"));
+    }
+    msg.push_str(
+        "\nSynthesize these into a cohesive file-level summary. \
+         Focus on the overall purpose and how the symbols relate to each other.",
+    );
+    msg
+}
+
 fn format_import(import: &Import) -> String {
     if import.names.is_empty() {
         format!("- {}", import.module)
