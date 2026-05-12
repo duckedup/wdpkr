@@ -56,8 +56,9 @@ pub async fn run(args: IndexArgs) -> Result<()> {
         embedder.model_name()
     );
 
+    let root = std::env::current_dir()?;
     let index_run = IndexRun::new(chunker, summarizer, embedder, store, namespace);
-    let report = index_run.run(args.full).await?;
+    let report = index_run.run(args.full, &root).await?;
 
     eprintln!(
         "Done: {} files processed, {} failed, {} vectors upserted, {} deleted",

@@ -5,6 +5,8 @@ pub mod git;
 pub mod pipeline;
 pub mod walk;
 
+use std::path::Path;
+
 use anyhow::{Result, bail};
 
 use crate::chunk::Chunker;
@@ -45,9 +47,12 @@ impl IndexRun {
         }
     }
 
-    pub async fn run(&self, full: bool) -> Result<IndexReport> {
-        let head = git::current_sha()?;
-        let root = std::env::current_dir()?;
+    /// Run the indexer against the given repo root.
+    ///
+    /// `full = true` ignores the HWM and walks all files. `full = false`
+    /// diffs from the stored HWM to HEAD and processes only changed files.
+    pub async fn run(&self, full: bool, root: &Path) -> Result<IndexReport> {
+        let head = git::current_sha(root)?;
 
         if !self.store.namespace_exists(&self.namespace).await? {
             self.store
@@ -72,11 +77,11 @@ impl IndexRun {
 
         let (to_process, to_delete) = match (&meta.hwm_sha, full) {
             (_, true) | (None, _) => {
-                let files = walk::walk_files(&root)?;
+                let files = walk::walk_files(root)?;
                 let rel_paths: Vec<String> = files
                     .iter()
                     .filter_map(|p| {
-                        p.strip_prefix(&root)
+                        p.strip_prefix(root)
                             .ok()
                             .map(|r| r.to_string_lossy().to_string())
                     })
@@ -84,7 +89,7 @@ impl IndexRun {
                 (rel_paths, vec![])
             }
             (Some(hwm), false) => {
-                let diff = git::diff_files(hwm, &head)?;
+                let diff = git::diff_files(root, hwm, &head)?;
                 (diff.changed, diff.deleted)
             }
         };
@@ -156,7 +161,7 @@ impl IndexRun {
 pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
     let ns = &config.indexer.namespace;
     if ns.is_empty() {
-        let remote = git::remote_url()?;
+        let remote = git::remote_url(&std::env::current_dir()?)?;
         Ok(Namespace::from(git::derive_namespace(&remote)))
     } else {
         Ok(Namespace::from(ns.clone()))

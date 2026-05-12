@@ -1,0 +1,533 @@
+//! End-to-end integration tests: index a fixture repo, then search it.
+//!
+//! Uses real tree-sitter chunking against real source files in a temp git
+//! repo. Summarizer and embedder are mocks — no API calls, no cost.
+//! The mock store is shared between index and search so documents flow
+//! through the full pipeline: file → chunk → summarize → embed → upsert
+//! → search → results.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+
+use megagrep::chunk::tree_sitter::TreeSitterChunker;
+use megagrep::indexer::IndexRun;
+use megagrep::search::{SearchParams, SearchRun};
+use megagrep::store::{Namespace, VectorStore};
+use megagrep::testing::mock_embed::MockEmbedder;
+use megagrep::testing::mock_store::MockVectorStore;
+use megagrep::testing::mock_summarize::MockSummarizer;
+
+// ── Fixture helpers ───────────────────────────────────────────────────────
+
+fn unique_tempdir(label: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "megagrep-e2e-{label}-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+/// Create a temp directory with a git repo containing fixture source files.
+fn create_fixture_repo(label: &str) -> PathBuf {
+    let dir = unique_tempdir(label);
+
+    git(&dir, &["init"]);
+    git(&dir, &["config", "user.email", "test@megagrep.dev"]);
+    git(&dir, &["config", "user.name", "Test"]);
+
+    // Rust file with two functions
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("payments.rs"),
+        r#"use std::io;
+
+/// Releases a commission payment to a payee.
+pub fn release_payment(payee_id: u64, amount: f64) -> Result<(), String> {
+    if amount <= 0.0 {
+        return Err("amount must be positive".into());
+    }
+    println!("Releasing {amount} to payee {payee_id}");
+    Ok(())
+}
+
+/// Processes a refund for a previously released payment.
+pub fn process_refund(payment_id: u64) -> Result<(), String> {
+    println!("Refunding payment {payment_id}");
+    Ok(())
+}
+"#,
+    )
+    .unwrap();
+
+    // Python file
+    std::fs::write(
+        src.join("auth.py"),
+        r#"
+def authenticate(username: str, password: str) -> bool:
+    """Authenticate a user against the credential store."""
+    return username == "admin" and password == "secret"
+
+def revoke_session(session_id: str) -> None:
+    """Revoke an active session."""
+    print(f"Revoking session {session_id}")
+"#,
+    )
+    .unwrap();
+
+    // Go file
+    std::fs::write(
+        src.join("handler.go"),
+        r#"package api
+
+import "net/http"
+
+// HandleRequest processes an incoming HTTP request.
+func HandleRequest(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+}
+"#,
+    )
+    .unwrap();
+
+    // Non-code file (should get file-level only, no symbols)
+    std::fs::write(
+        dir.join("README.md"),
+        "# Test Repo\n\nA fixture for integration tests.\n",
+    )
+    .unwrap();
+
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "initial commit"]);
+
+    dir
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {} failed in {}: {}",
+        args.join(" "),
+        dir.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn cleanup(dir: &Path) {
+    std::fs::remove_dir_all(dir).ok();
+}
+
+fn build_index_run(store: MockVectorStore, embedder: MockEmbedder) -> IndexRun {
+    IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(embedder),
+        Box::new(store),
+        Namespace::from("test-e2e"),
+    )
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn full_index_populates_store() {
+    let dir = create_fixture_repo("full-index");
+    let store = MockVectorStore::new();
+    let embedder = MockEmbedder::new(8);
+    let index = build_index_run(store, embedder);
+
+    let report = index.run(true, &dir).await.unwrap();
+
+    assert!(report.files_processed > 0, "should process files");
+    assert_eq!(report.files_failed, 0, "no files should fail");
+    assert!(report.vectors_upserted > 0, "should upsert vectors");
+    assert!(report.hwm_advanced_to.is_some(), "should set HWM");
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn index_produces_file_and_symbol_documents() {
+    let dir = create_fixture_repo("docs");
+    let store = MockVectorStore::new();
+    let embedder = MockEmbedder::new(8);
+    let index = build_index_run(store, embedder);
+
+    let report = index.run(true, &dir).await.unwrap();
+
+    // We have 4 files: payments.rs (2 fns), auth.py (2 fns), handler.go (1 fn), README.md
+    // Expected: >= 4 file-level + several symbol-level
+    assert!(
+        report.vectors_upserted >= 4,
+        "expected at least 4 docs (one per file), got {}",
+        report.vectors_upserted
+    );
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn hwm_is_stored_after_indexing() {
+    let dir = create_fixture_repo("hwm");
+    let store = MockVectorStore::new();
+    let embedder = MockEmbedder::new(8);
+    let index = build_index_run(store, embedder);
+
+    let report = index.run(true, &dir).await.unwrap();
+
+    // The IndexRun owns the store now, but we can check via the report
+    assert!(report.hwm_advanced_to.is_some());
+    let sha = report.hwm_advanced_to.unwrap();
+    assert!(sha.len() >= 7);
+    assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn index_then_search_round_trip() {
+    let dir = create_fixture_repo("round-trip");
+
+    // Shared store: index writes to it, search reads from it
+    let store = Arc::new(MockVectorStore::new());
+    let ns = Namespace::from("test-roundtrip");
+
+    // Index
+    let index = IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    let report = index.run(true, &dir).await.unwrap();
+    assert!(report.vectors_upserted > 0);
+
+    // Search
+    let search = SearchRun::new(
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    let result = search
+        .run(&SearchParams {
+            query: "payment release".into(),
+            top_k: 10,
+            symbols_per_file: 5,
+            no_symbols: false,
+            scope: None,
+        })
+        .await
+        .unwrap();
+
+    // Results should come back (we can't assert on ranking with hash-based
+    // mock embeddings, but we can verify structural correctness)
+    assert!(!result.results.is_empty(), "search should return results");
+    assert_eq!(result.namespace, "test-roundtrip");
+    assert!(result.indexed_at.is_some(), "should include HWM");
+
+    // Every result should have a path and summary
+    for file_result in &result.results {
+        assert!(!file_result.path.is_empty());
+        assert!(!file_result.summary.is_empty());
+    }
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn search_finds_indexed_file_paths() {
+    let dir = create_fixture_repo("paths");
+
+    let store = Arc::new(MockVectorStore::new());
+    let ns = Namespace::from("test-paths");
+
+    let index = IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    index.run(true, &dir).await.unwrap();
+
+    let search = SearchRun::new(
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    let result = search
+        .run(&SearchParams {
+            query: "anything".into(),
+            top_k: 20,
+            symbols_per_file: 10,
+            no_symbols: false,
+            scope: None,
+        })
+        .await
+        .unwrap();
+
+    let paths: Vec<&str> = result.results.iter().map(|r| r.path.as_str()).collect();
+    // payments.rs was indexed → it should appear somewhere in results
+    let has_payments = paths.iter().any(|p| p.contains("payments.rs"));
+    assert!(
+        has_payments,
+        "expected payments.rs in results; got: {paths:?}"
+    );
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn symbols_appear_nested_under_files() {
+    let dir = create_fixture_repo("symbols");
+
+    let store = Arc::new(MockVectorStore::new());
+    let ns = Namespace::from("test-symbols");
+
+    let index = IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    index.run(true, &dir).await.unwrap();
+
+    let search = SearchRun::new(
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    let result = search
+        .run(&SearchParams {
+            query: "anything".into(),
+            top_k: 20,
+            symbols_per_file: 10,
+            no_symbols: false,
+            scope: None,
+        })
+        .await
+        .unwrap();
+
+    // Find the payments.rs result and check it has symbols
+    let payments = result
+        .results
+        .iter()
+        .find(|r| r.path.contains("payments.rs"));
+    if let Some(p) = payments {
+        assert!(
+            !p.symbols.is_empty(),
+            "payments.rs should have symbols (release_payment, process_refund)"
+        );
+        let sym_names: Vec<&str> = p.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            sym_names
+                .iter()
+                .any(|n| n.contains("release_payment") || n.contains("process_refund")),
+            "expected release_payment or process_refund; got: {sym_names:?}"
+        );
+    }
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn scope_filter_limits_results_after_index() {
+    let dir = create_fixture_repo("scope");
+
+    let store = Arc::new(MockVectorStore::new());
+    let ns = Namespace::from("test-scope");
+
+    let index = IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    index.run(true, &dir).await.unwrap();
+
+    let search = SearchRun::new(
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+
+    // Scope to src/ — should exclude README.md
+    let result = search
+        .run(&SearchParams {
+            query: "anything".into(),
+            top_k: 20,
+            symbols_per_file: 10,
+            no_symbols: false,
+            scope: Some("src/".into()),
+        })
+        .await
+        .unwrap();
+
+    for file_result in &result.results {
+        assert!(
+            file_result.path.starts_with("src/"),
+            "scoped result has unexpected path: {}",
+            file_result.path
+        );
+    }
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn incremental_index_only_processes_changed_files() {
+    let dir = create_fixture_repo("incremental");
+
+    let store = Arc::new(MockVectorStore::new());
+    let ns = Namespace::from("test-incr");
+
+    // Full index
+    let index = IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    let report1 = index.run(true, &dir).await.unwrap();
+    let initial_count = report1.files_processed;
+
+    // Add a new file and commit
+    std::fs::write(
+        dir.join("src/new_feature.rs"),
+        "pub fn new_thing() { println!(\"new\"); }\n",
+    )
+    .unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "add new feature"]);
+
+    // Incremental index (full=false)
+    let index2 = IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    let report2 = index2.run(false, &dir).await.unwrap();
+
+    assert!(
+        report2.files_processed < initial_count,
+        "incremental should process fewer files ({} vs {})",
+        report2.files_processed,
+        initial_count
+    );
+    assert!(report2.files_processed >= 1, "should process the new file");
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn json_output_is_valid_after_full_pipeline() {
+    let dir = create_fixture_repo("json-output");
+
+    let store = Arc::new(MockVectorStore::new());
+    let ns = Namespace::from("test-json");
+
+    let index = IndexRun::new(
+        Box::new(TreeSitterChunker::new()),
+        Box::new(MockSummarizer::new()),
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    index.run(true, &dir).await.unwrap();
+
+    let search = SearchRun::new(
+        Box::new(MockEmbedder::new(8)),
+        Box::new(ArcStore(store.clone())),
+        ns.clone(),
+    );
+    let result = search
+        .run(&SearchParams {
+            query: "test".into(),
+            top_k: 5,
+            symbols_per_file: 3,
+            no_symbols: false,
+            scope: None,
+        })
+        .await
+        .unwrap();
+
+    let json_str = megagrep::search::output::render_json(&result).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    assert!(json["query"].is_string());
+    assert!(json["namespace"].is_string());
+    assert!(json["results"].is_array());
+
+    cleanup(&dir);
+}
+
+// ── Arc wrapper for shared mock store ─────────────────────────────────────
+// IndexRun and SearchRun take `Box<dyn VectorStore>` (owned). To share
+// a single MockVectorStore between index and search, we wrap it in Arc
+// and implement VectorStore on the wrapper by delegating to the inner.
+
+struct ArcStore(Arc<MockVectorStore>);
+
+#[async_trait::async_trait]
+impl VectorStore for ArcStore {
+    async fn create_namespace(&self, ns: &Namespace, dimension: usize) -> anyhow::Result<()> {
+        self.0.create_namespace(ns, dimension).await
+    }
+    async fn delete_namespace(&self, ns: &Namespace) -> anyhow::Result<()> {
+        self.0.delete_namespace(ns).await
+    }
+    async fn namespace_exists(&self, ns: &Namespace) -> anyhow::Result<bool> {
+        self.0.namespace_exists(ns).await
+    }
+    async fn get_metadata(
+        &self,
+        ns: &Namespace,
+    ) -> anyhow::Result<megagrep::store::NamespaceMetadata> {
+        self.0.get_metadata(ns).await
+    }
+    async fn set_metadata(
+        &self,
+        ns: &Namespace,
+        meta: &megagrep::store::NamespaceMetadata,
+    ) -> anyhow::Result<()> {
+        self.0.set_metadata(ns, meta).await
+    }
+    async fn upsert(
+        &self,
+        ns: &Namespace,
+        docs: &[megagrep::store::VectorDocument],
+    ) -> anyhow::Result<megagrep::store::UpsertStats> {
+        self.0.upsert(ns, docs).await
+    }
+    async fn delete_by_ids(&self, ns: &Namespace, ids: &[&str]) -> anyhow::Result<()> {
+        self.0.delete_by_ids(ns, ids).await
+    }
+    async fn delete_by_file(&self, ns: &Namespace, file_path: &str) -> anyhow::Result<()> {
+        self.0.delete_by_file(ns, file_path).await
+    }
+    async fn search(
+        &self,
+        ns: &Namespace,
+        query_vector: &[f32],
+        opts: &megagrep::store::SearchOptions,
+    ) -> anyhow::Result<Vec<megagrep::store::SearchResult>> {
+        self.0.search(ns, query_vector, opts).await
+    }
+}
