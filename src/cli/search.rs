@@ -148,7 +148,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn run_fails_with_unimplemented_provider() {
+    async fn run_fails_without_store_credentials() {
         clear_env();
         set_env("MEGAGREP_NAMESPACE", "test-repo");
         set_env("VOYAGE_API_KEY", "fake-key");
@@ -162,8 +162,8 @@ mod tests {
         };
         let err = run(args).await.unwrap_err();
         assert!(
-            err.to_string().contains("not yet implemented"),
-            "should fail on unimplemented provider; got: {err}"
+            err.to_string().contains("TURBOPUFFER_API_KEY"),
+            "should fail on missing store credential; got: {err}"
         );
         clear_env();
     }

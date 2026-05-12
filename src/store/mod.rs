@@ -6,6 +6,8 @@
 //!
 //! Implementation tracks root `SPEC.md` § VectorStore trait.
 
+pub mod turbopuffer;
+
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -178,15 +180,7 @@ pub struct UpsertStats {
     pub skipped: usize,
 }
 
-/// Construct a [`VectorStore`] from the resolved config. Dispatches on
-/// `config.provider`. Returns an error if the provider is not yet
-/// implemented — the Turbopuffer adapter plugs in here when its issue lands.
-pub fn build_store(config: &crate::config::StoreConfig) -> Result<Box<dyn VectorStore>> {
-    anyhow::bail!(
-        "store provider '{}' is not yet implemented",
-        config.provider,
-    )
-}
+pub use turbopuffer::build_store;
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 
