@@ -49,21 +49,49 @@ bd close <id>         # Complete work
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
 
-
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+just test          # run all tests (~300)
+just ci            # fmt-check + clippy (-D warnings) + test
+just lint          # clippy only
+just fmt           # format code
+just build         # debug build
+just release       # optimized release build
+just run <args>    # run from source (e.g. `just run search "query"`)
 ```
+
+Rust 1.95+ required (pinned via `rust-toolchain.toml`). Edition 2024.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+megagrep is a CLI tool that maintains a vector-search index of LLM-generated code summaries. Two commands:
+
+- `megagrep index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to Turbopuffer
+- `megagrep search "<query>"` — embeds query, searches Turbopuffer, returns tiered file+symbol JSON
+
+```
+src/
+├── cli/          # Clap parsing + subcommand dispatch
+├── config/       # 4-layer resolution: defaults → file → env → CLI flags
+├── chunk/        # tree-sitter AST chunking (8 languages)
+├── summarize/    # Anthropic adapter + prompt templates + big-file rollup
+├── embed/        # Voyage / Ollama / OpenAI adapters
+├── store/        # VectorStore trait + Turbopuffer adapter
+├── search/       # Search orchestration + JSON/pretty output
+├── indexer/      # Full pipeline: git diff → walk → chunk → summarize → embed → upsert
+└── testing/      # Mocks (store, embedder, summarizer) + fixtures
+```
+
+All external API adapters share the same pattern: reqwest HTTP client, bounded exponential-backoff retry on 429/5xx, configurable base URL for testing.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- **Trait-first design**: VectorStore, Embedder, Summarizer, Chunker are all traits with mock + real implementations
+- **Config via `env_or` pattern**: `env_or_resolved(KEY, file_or_resolved(file_value, default))` — every field has a known env var, file key, and hardcoded default
+- **Tests are mock-based**: no live API calls in the test suite. Integration tests create temp git repos with fixture source files
+- **Commit style**: emoji prefix + short description (e.g. `🔍 search orchestration`)
+- **Issue tracking**: `bd` (beads) — run `bd ready` for available work
+- **Branch workflow**: one branch per issue or bundled epic, push for PR review
+- **Error handling**: `anyhow` at binary boundary, traits return `anyhow::Result`
+- **Async runtime**: `tokio` — `current_thread` for search (fast cold start), `multi_thread` for index

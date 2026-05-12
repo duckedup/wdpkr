@@ -1,0 +1,47 @@
+# .megagrepignore — files to exclude from megagrep indexing.
+# These are committed files that .gitignore doesn't cover but that
+# add noise to semantic search (lockfiles, generated code, snapshots).
+# Syntax is identical to .gitignore.
+
+# Lockfiles
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+go.sum
+Cargo.lock
+Gemfile.lock
+poetry.lock
+composer.lock
+
+# Generated code
+*.pb.go
+*.pb.rs
+*_generated.go
+*_generated.ts
+*.gen.ts
+*.gen.go
+
+# Protobuf / gRPC definitions (optional — uncomment if noisy)
+# *.proto
+
+# Snapshot tests
+__snapshots__/
+*.snap
+
+# Large fixtures / test data
+*.fixture.*
+testdata/
+
+# Vendored dependencies
+vendor/
+node_modules/
+third_party/
+
+# Build artifacts that might be committed
+dist/
+build/
+.next/
+
+# Minified bundles
+*.min.js
+*.min.css

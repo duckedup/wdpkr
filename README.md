@@ -36,6 +36,41 @@ megagrep search "release commission payments to individual payees"
 
 The agent reads the actual files for ground truth. megagrep's job is to **point and describe**, not to ship source into the context window.
 
+## Quick start
+
+```bash
+# Install
+cargo install --path .
+
+# Initialize a repo (writes CLAUDE.md section, .megagrepignore, CI workflow)
+megagrep init
+
+# Set up credentials
+export ANTHROPIC_API_KEY=...   # for summarization (Claude Haiku)
+export VOYAGE_API_KEY=...      # for embedding (voyage-code-3)
+export TURBOPUFFER_API_KEY=... # for vector storage
+
+# Index the codebase
+megagrep index --full
+
+# Search
+megagrep search "release commission payments"
+megagrep search "how is rate limiting implemented" --pretty
+megagrep search "auth flow" --scope src/auth/ -k 10
+```
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `megagrep index [--full]` | Index the codebase (full or incremental from HWM) |
+| `megagrep search "<query>"` | Semantic search, returns tiered JSON |
+| `megagrep config list` | Show all config values and their sources |
+| `megagrep config get <key>` | Get a single config value |
+| `megagrep config set <key> <val>` | Set a config value in the config file |
+| `megagrep config init` | Write default config file |
+| `megagrep init` | Initialize megagrep for a repo (CLAUDE.md, .megagrepignore, CI workflow) |
+
 ## Architecture
 
 ```
@@ -64,7 +99,7 @@ The agent reads the actual files for ground truth. megagrep's job is to **point 
 ### Key decisions
 
 - **Embed summaries, not code.** Off-the-shelf embedders are mediocre on conceptual queries against raw code (vocabulary gap). LLM-generated summaries close that gap.
-- **AST-driven chunking.** Tree-sitter parses files into semantically meaningful symbols (functions, types, traits) rather than arbitrary line splits.
+- **AST-driven chunking.** Tree-sitter parses files into semantically meaningful symbols (functions, types, traits) rather than arbitrary line splits. 8 languages: Rust, Go, TypeScript, JavaScript, Python, Java, C/C++, C#.
 - **Pluggable backends.** Traits for VectorStore, Embedder, Summarizer, and Chunker — single implementations shipped, designed for swap.
 - **CLI, not MCP.** Any agent that can shell out can use it. Auth stays in env vars. JSON to stdout, errors to stderr.
 - **One namespace per repo.** Updated in place on each merge to main via a high-water-mark diff. No historical search, no commit-keyed namespaces.
@@ -82,30 +117,49 @@ The agent reads the actual files for ground truth. megagrep's job is to **point 
 | Chunker | tree-sitter (8 languages) |
 | Config | `~/.config/megagrep/config.yaml` + env vars + CLI flags |
 
+## Configuration
+
+Four-layer resolution: `defaults → config file → env vars → CLI flags`.
+
+```bash
+megagrep config init    # Write default config
+megagrep config list    # Show values + where each came from
+```
+
+Key env vars:
+```
+TURBOPUFFER_API_KEY     # vector storage (always required)
+VOYAGE_API_KEY          # embedding (default provider)
+ANTHROPIC_API_KEY       # summarization (always required)
+MEGAGREP_NAMESPACE      # override auto-derived namespace
+MEGAGREP_EMBED_PROVIDER # voyage | ollama | openai
+```
+
 ## Roadmap
 
 ### Done
 
-- [x] **Config module** — four-layer resolution (defaults → file → env → CLI flags), source attribution, `config list/get/set/init/edit/path` commands, hard error on malformed config
+- [x] **Config module** — four-layer resolution, source attribution, `config list/get/set/init/edit/path`
 - [x] **CLI foundation** — clap subcommands (search, index, config, init), command-aware tokio runtime
-- [x] **Search vertical** — VectorStore + Embedder traits, mock implementations with real cosine similarity, search orchestration (embed → search → group → tiered JSON), output formatting (JSON + `--pretty`), end-to-end integration tests
+- [x] **Search vertical** — VectorStore + Embedder traits, mock implementations with real cosine similarity, search orchestration, JSON + `--pretty` output, end-to-end integration tests
+- [x] **Chunker** — tree-sitter AST walker, per-language node-type maps (8 languages), doc-comment association, import extraction
+- [x] **Summarizer** — Anthropic adapter with retry, prompt templates (file + symbol level), big-file roll-up
+- [x] **Real embedder adapters** — Voyage, Ollama, OpenAI with bounded retry
+- [x] **VectorStore adapter** — Turbopuffer with attribute-filtered search
+- [x] **Indexer pipeline** — git diff, repo walker, chunk → summarize → embed → upsert, HWM tracking
+- [x] **Init command** — CLAUDE.md/AGENTS.md section, .megagrepignore, CI workflow generation
+- [x] **Integration tests** — full index → search round-trip against temp git repos with mocks
 - [x] **CI** — Forgejo workflow (fmt, clippy, test, release build)
 
-### Next
+### Remaining
 
-- [ ] **Real embedder adapters** — Voyage, Ollama, OpenAI
-- [ ] **VectorStore adapter** — Turbopuffer
-- [ ] **Chunker** — tree-sitter AST walker, per-language node-type maps
-- [ ] **Summarizer** — Anthropic adapter, prompt templates
-- [ ] **Indexer pipeline** — git diff, repo walker, chunk → summarize → embed → upsert
-- [ ] **Eval harness** — golden-query cases, recall@k, MRR
-- [ ] **Init command** — CLAUDE.md, .megagrepignore, CI workflow generation
-- [ ] **Distribution** — release binaries, cargo install
+- [ ] **Eval harness** — recall@k / MRR scoring against golden queries
+- [ ] **Distribution** — CI release binaries, `cargo install` from crates.io
 
 ## Development
 
 ```bash
-just test          # run all tests (173 currently)
+just test          # run all tests (318 currently)
 just ci            # fmt-check + clippy + test
 just run search "query"   # run from source
 just release       # optimized binary
