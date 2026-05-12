@@ -10,6 +10,8 @@
 //!
 //! Implementation tracks root `SPEC.md` § Summarizer trait.
 
+pub mod prompts;
+
 use anyhow::Result;
 use async_trait::async_trait;
 
