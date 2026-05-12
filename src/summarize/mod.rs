@@ -10,6 +10,7 @@
 //!
 //! Implementation tracks root `SPEC.md` § Summarizer trait.
 
+pub mod anthropic;
 pub mod prompts;
 
 use anyhow::Result;
