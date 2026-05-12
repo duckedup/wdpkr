@@ -1,11 +1,12 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Args;
 
 use crate::config::Config;
 use crate::embed::build_embedder;
+use crate::indexer::resolve_namespace;
 use crate::search::output;
 use crate::search::{SearchParams, SearchRun};
-use crate::store::{Namespace, build_store};
+use crate::store::build_store;
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
@@ -59,18 +60,6 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     };
     print!("{rendered}");
     Ok(())
-}
-
-fn resolve_namespace(config: &Config) -> Result<Namespace> {
-    let ns = &config.indexer.namespace;
-    if ns.is_empty() {
-        bail!(
-            "namespace not configured; set MEGAGREP_NAMESPACE or \
-             `indexer.namespace` in config (automatic derivation from \
-             git remote is not yet implemented)"
-        );
-    }
-    Ok(Namespace::from(ns.clone()))
 }
 
 #[cfg(test)]
@@ -138,11 +127,15 @@ mod tests {
 
     #[test]
     #[serial]
-    fn resolve_namespace_errors_when_empty() {
+    fn resolve_namespace_derives_from_git_when_empty() {
         clear_env();
         let config = Config::from_file(None);
-        let err = resolve_namespace(&config).unwrap_err();
-        assert!(err.to_string().contains("namespace not configured"));
+        let ns = resolve_namespace(&config).unwrap();
+        assert!(
+            ns.as_str().contains("megagrep"),
+            "should derive namespace from git remote; got: {}",
+            ns.as_str()
+        );
         clear_env();
     }
 

@@ -1,5 +1,12 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Args;
+
+use crate::chunk::tree_sitter::TreeSitterChunker;
+use crate::config::Config;
+use crate::embed::build_embedder;
+use crate::indexer::{IndexRun, resolve_namespace};
+use crate::store::build_store;
+use crate::summarize::anthropic::build_summarizer;
 
 #[derive(Args, Debug)]
 pub struct IndexArgs {
@@ -24,6 +31,44 @@ pub struct IndexArgs {
     pub max_cost: Option<f64>,
 }
 
-pub async fn run(_args: IndexArgs) -> Result<()> {
-    anyhow::bail!("megagrep index is not yet implemented")
+pub async fn run(args: IndexArgs) -> Result<()> {
+    if args.dry_run {
+        bail!("--dry-run is not yet implemented");
+    }
+    if args.from.is_some() {
+        bail!("--from is not yet implemented");
+    }
+
+    let config = Config::new()?;
+    config.embed.validate()?;
+    config.summarizer.validate()?;
+
+    let namespace = resolve_namespace(&config)?;
+    let chunker: Box<dyn crate::chunk::Chunker> = Box::new(TreeSitterChunker::new());
+    let summarizer = build_summarizer(&config.summarizer)?;
+    let embedder = build_embedder(&config.embed).await?;
+    let store = build_store(&config.store)?;
+
+    eprintln!(
+        "Indexing into namespace '{}' with {}/{}...",
+        namespace.as_str(),
+        embedder.provider_name(),
+        embedder.model_name()
+    );
+
+    let index_run = IndexRun::new(chunker, summarizer, embedder, store, namespace);
+    let report = index_run.run(args.full).await?;
+
+    eprintln!(
+        "Done: {} files processed, {} failed, {} vectors upserted, {} deleted",
+        report.files_processed,
+        report.files_failed,
+        report.vectors_upserted,
+        report.vectors_deleted
+    );
+    if let Some(ref sha) = report.hwm_advanced_to {
+        eprintln!("HWM advanced to {sha}");
+    }
+
+    Ok(())
 }
