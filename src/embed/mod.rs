@@ -1,67 +1,51 @@
 //! Embedder abstraction.
 //!
 //! Defines the [`Embedder`] trait for embedding natural-language summaries
-//! into dense vectors. v1 ships three adapters — Voyage (default), Ollama
-//! (local/offline), OpenAI (fallback) — each in a separate file. A factory
-//! function dispatches on [`EmbedConfig::provider`].
+//! into dense vectors. Three adapters ship in v1:
+//! - **Voyage** (`voyage.rs`) — default, code-trained model
+//! - **Ollama** (`ollama.rs`) — local/offline, free iteration
+//! - **OpenAI** (`openai.rs`) — widely available fallback
 //!
-//! Implementation tracks root `SPEC.md` § Embedder trait.
+//! [`build_embedder`] dispatches on [`EmbedConfig::provider`].
 
-use anyhow::Result;
+pub mod ollama;
+pub mod openai;
+pub mod voyage;
+
+use anyhow::{Result, bail};
 use async_trait::async_trait;
+
+use crate::config::EmbedConfig;
 
 #[async_trait]
 pub trait Embedder: Send + Sync {
-    /// Embed a single text string, returning a dense vector.
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
-
-    /// Embed a batch of texts. Implementations handle chunking against
-    /// their provider's batch-size limits internally — callers pass all
-    /// texts at once without worrying about per-provider caps.
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
-
-    /// The dimensionality of vectors this embedder produces. For providers
-    /// with fixed dimensions (Voyage, OpenAI), this is a constant looked
-    /// up from a hardcoded map. For Ollama, detected via a probe embed
-    /// on initialization.
     fn dimension(&self) -> usize;
-
-    /// Max input tokens the model accepts. Text exceeding this is
-    /// truncated (with a warning) before embedding.
     fn max_input_tokens(&self) -> usize;
-
-    /// Provider name for logging and diagnostics (e.g. "voyage", "ollama").
     fn provider_name(&self) -> &str;
-
-    /// Model identifier for logging and config validation.
     fn model_name(&self) -> &str;
 }
 
-/// Compact description of an embedder's identity, suitable for storing in
-/// [`NamespaceMetadata::embedder`] to detect mismatches between indexing
-/// and search. Format: `"provider/model"` (e.g. `"voyage/voyage-code-3"`).
 pub fn embedder_identity(embedder: &dyn Embedder) -> String {
     format!("{}/{}", embedder.provider_name(), embedder.model_name())
 }
 
-/// Construct an [`Embedder`] from the resolved config. Dispatches on
-/// `config.provider`. Returns an error if the provider is not yet
-/// implemented — real adapters (Voyage, Ollama, OpenAI) plug in here
-/// when their issues land.
-pub fn build_embedder(config: &crate::config::EmbedConfig) -> Result<Box<dyn Embedder>> {
-    anyhow::bail!(
-        "embedder provider '{}' is not yet implemented (model: {})",
-        config.provider,
-        config.model,
-    )
+/// Construct an [`Embedder`] from the resolved config. Ollama's constructor
+/// is async (dimension probe), so the factory is async.
+pub async fn build_embedder(config: &EmbedConfig) -> Result<Box<dyn Embedder>> {
+    config.validate()?;
+    match config.provider.as_str() {
+        "voyage" => Ok(Box::new(voyage::VoyageEmbedder::new(config)?)),
+        "ollama" => Ok(Box::new(ollama::OllamaEmbedder::new(config).await?)),
+        "openai" => Ok(Box::new(openai::OpenAiEmbedder::new(config)?)),
+        other => bail!("unknown embedder provider: '{other}'"),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn _assert_send<T: Send>() {}
-    fn _assert_sync<T: Sync>() {}
 
     #[test]
     fn trait_is_object_safe() {
@@ -70,15 +54,14 @@ mod tests {
 
     #[test]
     fn embedder_identity_format() {
-        struct FakeEmbedder;
-
+        struct Fake;
         #[async_trait]
-        impl Embedder for FakeEmbedder {
-            async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
-                Ok(vec![0.0; 3])
+        impl Embedder for Fake {
+            async fn embed(&self, _: &str) -> Result<Vec<f32>> {
+                Ok(vec![])
             }
-            async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-                Ok(texts.iter().map(|_| vec![0.0; 3]).collect())
+            async fn embed_batch(&self, t: &[&str]) -> Result<Vec<Vec<f32>>> {
+                Ok(t.iter().map(|_| vec![]).collect())
             }
             fn dimension(&self) -> usize {
                 3
@@ -93,10 +76,64 @@ mod tests {
                 "fake-v1"
             }
         }
+        assert_eq!(embedder_identity(&Fake), "test/fake-v1");
+    }
 
-        let e = FakeEmbedder;
-        assert_eq!(embedder_identity(&e), "test/fake-v1");
-        assert_eq!(e.dimension(), 3);
-        assert_eq!(e.max_input_tokens(), 8192);
+    // ── Factory ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn factory_voyage_with_key() {
+        let config = EmbedConfig {
+            provider: "voyage".into(),
+            model: "voyage-code-3".into(),
+            batch_size: 64,
+            voyage_api_key: "test-key".into(),
+            openai_api_key: String::new(),
+            ollama_host: "http://localhost:11434".into(),
+        };
+        let e = build_embedder(&config).await.unwrap();
+        assert_eq!(e.provider_name(), "voyage");
+        assert_eq!(e.dimension(), 1024);
+    }
+
+    #[tokio::test]
+    async fn factory_openai_with_key() {
+        let config = EmbedConfig {
+            provider: "openai".into(),
+            model: "text-embedding-3-large".into(),
+            batch_size: 64,
+            voyage_api_key: String::new(),
+            openai_api_key: "test-key".into(),
+            ollama_host: "http://localhost:11434".into(),
+        };
+        let e = build_embedder(&config).await.unwrap();
+        assert_eq!(e.provider_name(), "openai");
+        assert_eq!(e.dimension(), 3072);
+    }
+
+    #[tokio::test]
+    async fn factory_voyage_without_key_errors() {
+        let config = EmbedConfig {
+            provider: "voyage".into(),
+            model: "voyage-code-3".into(),
+            batch_size: 64,
+            voyage_api_key: String::new(),
+            openai_api_key: String::new(),
+            ollama_host: "http://localhost:11434".into(),
+        };
+        assert!(build_embedder(&config).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn factory_unknown_provider_errors() {
+        let config = EmbedConfig {
+            provider: "cohere".into(),
+            model: "embed-v3".into(),
+            batch_size: 64,
+            voyage_api_key: String::new(),
+            openai_api_key: String::new(),
+            ollama_host: "http://localhost:11434".into(),
+        };
+        assert!(build_embedder(&config).await.is_err());
     }
 }

@@ -38,7 +38,7 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     config.embed.validate()?;
 
     let namespace = resolve_namespace(&config)?;
-    let embedder = build_embedder(&config.embed)?;
+    let embedder = build_embedder(&config.embed).await?;
     let store = build_store(&config.store)?;
 
     let params = SearchParams {
