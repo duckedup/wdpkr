@@ -135,9 +135,9 @@ impl VectorStore for TurbopufferStore {
 
     async fn namespace_exists(&self, ns: &Namespace) -> Result<bool> {
         let url = format!("{}/query", self.ns_url(ns));
+        // Aggregate queries reject `limit`; only `aggregate_by`/`filters`/`group_by`/`top_k` are valid.
         let body = QueryRequest {
             aggregate_by: Some(serde_json::json!({"n": ["Count"]})),
-            limit: Some(1),
             ..Default::default()
         };
         let resp = self
@@ -687,14 +687,17 @@ mod tests {
 
     #[test]
     fn query_request_aggregate_format() {
+        // Aggregate queries must not include `limit` — the v2 API rejects it
+        // with: unknown field `limit`, expected one of `aggregate_by`,
+        // `filters`, `group_by`, `top_k`.
         let body = QueryRequest {
             aggregate_by: Some(serde_json::json!({"n": ["Count"]})),
-            limit: Some(1),
             ..Default::default()
         };
         let json = serde_json::to_value(&body).unwrap();
         assert!(json["aggregate_by"]["n"].is_array());
         assert!(json.get("rank_by").is_none());
+        assert!(json.get("limit").is_none());
     }
 
     #[test]
