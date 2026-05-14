@@ -276,6 +276,11 @@ impl ResolvedConfig {
                 source: s.indexer.default_branch.clone(),
             },
             ConfigEntry {
+                key: "indexer.git_remote",
+                value: c.indexer.git_remote.clone(),
+                source: s.indexer.git_remote.clone(),
+            },
+            ConfigEntry {
                 key: "indexer.concurrency",
                 value: c.indexer.concurrency.to_string(),
                 source: s.indexer.concurrency.clone(),
@@ -355,6 +360,8 @@ pub struct FileIndexerConfig {
     pub namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_remote: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -478,6 +485,9 @@ impl FileConfig {
             }
             "indexer.default_branch" => {
                 self.indexer.get_or_insert_default().default_branch = Some(value.into());
+            }
+            "indexer.git_remote" => {
+                self.indexer.get_or_insert_default().git_remote = Some(value.into());
             }
             "indexer.concurrency" => {
                 let parsed: usize = value.parse().with_context(|| {

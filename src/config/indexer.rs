@@ -2,9 +2,11 @@ use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 
 pub struct IndexerConfig {
     /// Override for the auto-derived namespace name. Empty → derive from
-    /// `git remote get-url origin` (logic lives in the indexer module).
+    /// git remote URL.
     pub namespace: String,
     pub default_branch: String,
+    /// Git remote name used to derive the namespace. Default: "origin".
+    pub git_remote: String,
     pub concurrency: usize,
     pub max_cost: f64,
     pub hwm_success_threshold: f64,
@@ -14,6 +16,7 @@ pub struct IndexerConfig {
 pub struct IndexerSources {
     pub namespace: Source,
     pub default_branch: Source,
+    pub git_remote: Source,
     pub concurrency: Source,
     pub max_cost: Source,
     pub hwm_success_threshold: Source,
@@ -35,6 +38,10 @@ impl IndexerConfig {
             "MEGAGREP_DEFAULT_BRANCH",
             file_or_resolved(f.and_then(|i| i.default_branch.clone()), "main".into()),
         );
+        let git_remote: Resolved<String> = env_or_resolved(
+            "MEGAGREP_GIT_REMOTE",
+            file_or_resolved(f.and_then(|i| i.git_remote.clone()), "origin".into()),
+        );
         let concurrency: Resolved<usize> = env_or_resolved(
             "MEGAGREP_CONCURRENCY",
             file_or_resolved(f.and_then(|i| i.concurrency), 8),
@@ -52,6 +59,7 @@ impl IndexerConfig {
             Self {
                 namespace: namespace.value,
                 default_branch: default_branch.value,
+                git_remote: git_remote.value,
                 concurrency: concurrency.value,
                 max_cost: max_cost.value,
                 hwm_success_threshold: hwm_success_threshold.value,
@@ -59,6 +67,7 @@ impl IndexerConfig {
             IndexerSources {
                 namespace: namespace.source,
                 default_branch: default_branch.source,
+                git_remote: git_remote.source,
                 concurrency: concurrency.source,
                 max_cost: max_cost.source,
                 hwm_success_threshold: hwm_success_threshold.source,
@@ -142,6 +151,7 @@ mod tests {
                 concurrency: Some(24),
                 max_cost: Some(125.0),
                 hwm_success_threshold: Some(0.99),
+                ..Default::default()
             }),
             ..Default::default()
         };

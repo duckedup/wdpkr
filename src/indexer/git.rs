@@ -30,8 +30,8 @@ pub fn current_sha(dir: &Path) -> Result<String> {
     git_in(dir, &["rev-parse", "HEAD"])
 }
 
-pub fn remote_url(dir: &Path) -> Result<String> {
-    git_in(dir, &["remote", "get-url", "origin"])
+pub fn remote_url(dir: &Path, remote_name: &str) -> Result<String> {
+    git_in(dir, &["remote", "get-url", remote_name])
 }
 
 pub struct DiffResult {

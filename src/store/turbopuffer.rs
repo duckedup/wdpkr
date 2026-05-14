@@ -130,13 +130,21 @@ impl VectorStore for TurbopufferStore {
     }
 
     async fn namespace_exists(&self, ns: &Namespace) -> Result<bool> {
+        // Turbopuffer is serverless — no dedicated "get namespace" endpoint.
+        // Probe via a minimal query: 200 = exists, 404 = not found.
+        let url = format!("{}/query", self.ns_url(ns));
+        let body = serde_json::json!({
+            "top_k": 1,
+            "include_attributes": false,
+        });
         let resp = self
             .client
-            .get(self.ns_url(ns))
+            .post(url)
             .bearer_auth(&self.api_key)
+            .json(&body)
             .send()
             .await
-            .context("namespace_exists request failed")?;
+            .context("namespace_exists probe failed")?;
 
         match resp.status().as_u16() {
             200 => Ok(true),

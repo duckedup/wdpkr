@@ -162,7 +162,7 @@ impl IndexRun {
 pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
     let ns = &config.indexer.namespace;
     if ns.is_empty() {
-        let remote = git::remote_url(&std::env::current_dir()?)?;
+        let remote = git::remote_url(&std::env::current_dir()?, &config.indexer.git_remote)?;
         Ok(Namespace::from(git::derive_namespace(&remote)))
     } else {
         Ok(Namespace::from(ns.clone()))
