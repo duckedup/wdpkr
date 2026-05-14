@@ -141,7 +141,3 @@ All settings can also be set in `~/.config/wdpkr/config.yaml` via `wdpkr config 
 | `wdpkr config list` | Show all config values and their sources |
 | `wdpkr config get <key>` | Get a single config value |
 | `wdpkr config set <key> <val>` | Set a config value |
-
-## License
-
-MIT OR Apache-2.0
