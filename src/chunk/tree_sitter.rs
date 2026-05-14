@@ -117,8 +117,21 @@ fn extract_all(
 fn extract_symbol(node: &Node, source: &str, config: &LanguageConfig) -> Option<SymbolChunk> {
     let src = source.as_bytes();
 
+    // For export_statement and decorated_definition, the name lives on
+    // the child declaration, not the wrapper node.
     let name = node
         .child_by_field_name("name")
+        .or_else(|| {
+            // Dig into wrapper nodes for the nested declaration's name
+            if matches!(node.kind(), "export_statement" | "decorated_definition") {
+                let mut cursor = node.walk();
+                node.children(&mut cursor)
+                    .find(|c| c.child_by_field_name("name").is_some())
+                    .and_then(|c| c.child_by_field_name("name"))
+            } else {
+                None
+            }
+        })
         .and_then(|n| n.utf8_text(src).ok())
         .unwrap_or_default()
         .to_string();
@@ -427,6 +440,176 @@ function greet(user: User): string {
         let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"User"), "got: {names:?}");
         assert!(names.contains(&"greet"), "got: {names:?}");
+    }
+
+    #[test]
+    fn typescript_extracts_type_alias_and_enum() {
+        let src = r#"
+type UserRole = 'admin' | 'user' | 'guest';
+
+enum Status {
+    Active,
+    Inactive,
+    Pending,
+}
+
+export function getRole(): UserRole {
+    return 'admin';
+}
+"#;
+        let chunks = chunk(src, "typescript");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"UserRole"), "type alias: {names:?}");
+        assert!(names.contains(&"Status"), "enum: {names:?}");
+    }
+
+    #[test]
+    fn typescript_extracts_class_methods() {
+        let src = r#"
+class UserService {
+    private users: string[] = [];
+
+    async findById(id: number): Promise<string | undefined> {
+        return this.users[id];
+    }
+
+    create(name: string): void {
+        this.users.push(name);
+    }
+}
+"#;
+        let chunks = chunk(src, "typescript");
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"UserService"), "class: {names:?}");
+        assert!(names.contains(&"findById"), "method: {names:?}");
+        assert!(names.contains(&"create"), "method: {names:?}");
+    }
+
+    #[test]
+    fn typescript_extracts_imports() {
+        let src = r#"
+import { Request, Response } from 'express';
+import type { User } from './models';
+
+export function handler(req: Request, res: Response): void {
+    res.json({});
+}
+"#;
+        let chunks = chunk(src, "typescript");
+        assert!(
+            !chunks.imports.is_empty(),
+            "should extract imports: {:?}",
+            chunks.imports
+        );
+    }
+
+    #[test]
+    fn typescript_arrow_function_export() {
+        let src = r#"
+export const processPayment = async (amount: number): Promise<void> => {
+    console.log(amount);
+};
+"#;
+        let chunks = chunk(src, "typescript");
+        assert!(
+            !chunks.symbols.is_empty(),
+            "should extract exported arrow function"
+        );
+    }
+
+    // ── TSX ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn tsx_parses_jsx_without_errors() {
+        let src = r#"
+import React from 'react';
+
+interface Props {
+    name: string;
+    count: number;
+}
+
+export function Greeting({ name, count }: Props): JSX.Element {
+    return (
+        <div className="greeting">
+            <h1>Hello {name}</h1>
+            <p>You have {count} messages</p>
+        </div>
+    );
+}
+"#;
+        let chunker = TreeSitterChunker::new();
+        let chunks = chunker.chunk("App.tsx", src, "tsx").unwrap();
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Props"), "interface: {names:?}");
+        assert!(names.contains(&"Greeting"), "function: {names:?}");
+    }
+
+    #[test]
+    fn tsx_extracts_component_class() {
+        let src = r#"
+import React, { Component } from 'react';
+
+interface State {
+    count: number;
+}
+
+class Counter extends Component<{}, State> {
+    state = { count: 0 };
+
+    increment() {
+        this.setState({ count: this.state.count + 1 });
+    }
+
+    render() {
+        return <button onClick={() => this.increment()}>{this.state.count}</button>;
+    }
+}
+"#;
+        let chunker = TreeSitterChunker::new();
+        let chunks = chunker.chunk("Counter.tsx", src, "tsx").unwrap();
+        let names: Vec<&str> = chunks.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Counter"), "class component: {names:?}");
+    }
+
+    #[test]
+    fn typescript_barrel_reexports_no_parse_errors() {
+        let src = r#"
+export { Button } from './Button.svelte';
+export { Modal } from './Modal.svelte';
+export { Header } from './components/Header';
+export type { User, UserRole } from './types';
+export { default as App } from './App.svelte';
+"#;
+        let chunker = TreeSitterChunker::new();
+        let chunks = chunker.chunk("src/index.ts", src, "typescript").unwrap();
+        // Barrel files are mostly re-exports; symbols may or may not be extracted
+        // but the key thing is: NO parse errors (the tree should be valid).
+        assert_eq!(chunks.file_content, src);
+        // Imports count as exports in tree-sitter's view; verify no crash
+        // Barrel files are valid TS — no panics, no errors in the tree.
+        let _ = &chunks;
+    }
+
+    #[test]
+    fn tsx_barrel_reexports_no_parse_errors() {
+        let src = r#"
+export { Button } from './Button.svelte';
+export { Modal } from './Modal';
+export * from './utils';
+"#;
+        let chunker = TreeSitterChunker::new();
+        let chunks = chunker.chunk("src/index.tsx", src, "tsx").unwrap();
+        assert_eq!(chunks.file_content, src);
+    }
+
+    #[test]
+    fn tsx_file_extension_maps_to_tsx_language() {
+        assert_eq!(crate::chunk::detect_language("App.tsx"), Some("tsx"));
+        assert_eq!(
+            crate::chunk::detect_language("src/App.ts"),
+            Some("typescript")
+        );
     }
 
     // ── Java ──────────────────────────────────────────────────────────

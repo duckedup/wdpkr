@@ -19,6 +19,7 @@ pub fn get_config(language: &str) -> Option<LanguageConfig> {
         "rust" => Some(rust()),
         "go" => Some(go()),
         "typescript" => Some(typescript()),
+        "tsx" => Some(tsx()),
         "javascript" => Some(javascript()),
         "python" => Some(python()),
         "java" => Some(java()),
@@ -67,6 +68,24 @@ fn go() -> LanguageConfig {
 fn typescript() -> LanguageConfig {
     LanguageConfig {
         ts_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
+        symbol_types: &[
+            "function_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "type_alias_declaration",
+            "enum_declaration",
+            "export_statement",
+            "method_definition",
+        ],
+        container_types: &["class_declaration"],
+        comment_types: &["comment"],
+        import_types: &["import_statement"],
+    }
+}
+
+fn tsx() -> LanguageConfig {
+    LanguageConfig {
+        ts_language: tree_sitter_typescript::LANGUAGE_TSX,
         symbol_types: &[
             "function_declaration",
             "class_declaration",
@@ -184,6 +203,7 @@ mod tests {
             "rust",
             "go",
             "typescript",
+            "tsx",
             "javascript",
             "python",
             "java",

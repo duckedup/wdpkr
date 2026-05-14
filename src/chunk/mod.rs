@@ -75,7 +75,8 @@ pub fn detect_language(file_path: &str) -> Option<&'static str> {
     match ext {
         "rs" => Some("rust"),
         "go" => Some("go"),
-        "ts" | "tsx" => Some("typescript"),
+        "ts" => Some("typescript"),
+        "tsx" => Some("tsx"),
         "js" | "jsx" => Some("javascript"),
         "py" => Some("python"),
         "java" => Some("java"),
@@ -114,7 +115,11 @@ mod tests {
     #[test]
     fn detects_typescript() {
         assert_eq!(detect_language("src/app.ts"), Some("typescript"));
-        assert_eq!(detect_language("src/App.tsx"), Some("typescript"));
+    }
+
+    #[test]
+    fn detects_tsx() {
+        assert_eq!(detect_language("src/App.tsx"), Some("tsx"));
     }
 
     #[test]
