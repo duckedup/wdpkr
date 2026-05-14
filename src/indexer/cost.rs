@@ -1,8 +1,8 @@
 //! Cost estimation for `--dry-run` mode.
 //!
-//! Walks the repo, chunks every file (tree-sitter, local, free), estimates
-//! token counts, and calculates cost against hardcoded per-provider rates.
-//! No API calls, no credentials required.
+//! Walks the repo, chunks every file (tree-sitter, local, free), builds
+//! the actual prompt strings that would be sent to the summarizer, and
+//! estimates token counts from those. No API calls, no credentials required.
 
 use std::path::Path;
 
@@ -10,7 +10,9 @@ use anyhow::Result;
 
 use super::walk;
 use crate::chunk::{Chunker, detect_language};
+use crate::summarize::prompts::{self, SYSTEM_PROMPT};
 use crate::summarize::rollup::estimate_tokens;
+use crate::summarize::{FileSummaryInput, SymbolSummaryInput};
 
 #[derive(Debug, Clone)]
 pub struct DryRunReport {
@@ -56,9 +58,12 @@ impl ProviderRates {
 }
 
 const ESTIMATED_SUMMARY_OUTPUT_TOKENS: usize = 100;
+const PLACEHOLDER_FILE_SUMMARY: &str =
+    "Module implementing domain logic for data processing and validation with error handling.";
 
 pub fn dry_run(chunker: &dyn Chunker, root: &Path) -> Result<DryRunReport> {
     let files = walk::walk_files(root)?;
+    let system_prompt_tokens = estimate_tokens(SYSTEM_PROMPT);
 
     let mut files_total = 0;
     let mut files_with_symbols = 0;
@@ -84,10 +89,17 @@ pub fn dry_run(chunker: &dyn Chunker, root: &Path) -> Result<DryRunReport> {
         };
 
         files_total += 1;
-        total_chunks += 1; // file-level chunk
+        total_chunks += 1;
 
-        // File-level summarization input: the full file content
-        summarizer_input_tokens += estimate_tokens(&content);
+        // Build the actual file-level prompt and estimate tokens on that
+        let file_input = FileSummaryInput {
+            file_path: rel_path.to_string(),
+            content: content.clone(),
+            imports: chunks.imports.clone(),
+            language: language.to_string(),
+        };
+        let file_prompt = prompts::file_user_message(&file_input);
+        summarizer_input_tokens += system_prompt_tokens + estimate_tokens(&file_prompt);
 
         if !chunks.symbols.is_empty() {
             files_with_symbols += 1;
@@ -95,16 +107,23 @@ pub fn dry_run(chunker: &dyn Chunker, root: &Path) -> Result<DryRunReport> {
             total_chunks += chunks.symbols.len();
 
             for sym in &chunks.symbols {
-                summarizer_input_tokens += estimate_tokens(&sym.body);
+                let sym_input = SymbolSummaryInput {
+                    symbol_name: sym.name.clone(),
+                    symbol_kind: sym.kind.clone(),
+                    body: sym.body.clone(),
+                    signature: sym.signature.clone(),
+                    doc_comment: sym.doc_comment.clone(),
+                    file_path: rel_path.to_string(),
+                    file_summary: PLACEHOLDER_FILE_SUMMARY.to_string(),
+                };
+                let sym_prompt = prompts::symbol_user_message(&sym_input);
+                summarizer_input_tokens += system_prompt_tokens + estimate_tokens(&sym_prompt);
             }
         }
     }
 
     let summarizer_output_tokens = total_chunks * ESTIMATED_SUMMARY_OUTPUT_TOKENS;
-
-    // Each chunk (file + symbol) produces one summary → one embedding
     let embed_tokens = total_chunks * ESTIMATED_SUMMARY_OUTPUT_TOKENS;
-
     let estimated_vectors = total_chunks;
 
     Ok(DryRunReport {
@@ -116,7 +135,7 @@ pub fn dry_run(chunker: &dyn Chunker, root: &Path) -> Result<DryRunReport> {
         estimated_summarizer_output_tokens: summarizer_output_tokens,
         estimated_embed_tokens: embed_tokens,
         estimated_vectors,
-        estimated_cost_usd: 0.0, // filled in by caller with rates
+        estimated_cost_usd: 0.0,
     })
 }
 
@@ -234,6 +253,24 @@ mod tests {
         assert!(report.total_symbols > 0, "should find symbols");
         assert!(report.estimated_summarizer_input_tokens > 0);
         assert!(report.estimated_vectors > 0);
+    }
+
+    #[test]
+    fn dry_run_includes_prompt_overhead() {
+        let chunker = TreeSitterChunker::new();
+        let report = dry_run(&chunker, Path::new(".")).unwrap();
+
+        // With prompt overhead, input tokens should be significantly more than
+        // just the raw code. The system prompt alone is ~170 tokens per call,
+        // and we have at least (files + symbols) calls.
+        let min_overhead =
+            (report.files_total + report.total_symbols) * estimate_tokens(SYSTEM_PROMPT);
+        assert!(
+            report.estimated_summarizer_input_tokens > min_overhead,
+            "input tokens ({}) should exceed system prompt overhead alone ({})",
+            report.estimated_summarizer_input_tokens,
+            min_overhead
+        );
     }
 
     #[test]
