@@ -1,4 +1,4 @@
-use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved, resolved_default};
+use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 
 pub struct StoreConfig {
     pub provider: String,
@@ -26,8 +26,10 @@ impl StoreConfig {
             "MEGAGREP_STORE_PROVIDER",
             file_or_resolved(f.and_then(|s| s.provider.clone()), "turbopuffer".into()),
         );
-        let api_key: Resolved<String> =
-            env_or_resolved("TURBOPUFFER_API_KEY", resolved_default(String::new()));
+        let api_key: Resolved<String> = env_or_resolved(
+            "TURBOPUFFER_API_KEY",
+            file_or_resolved(f.and_then(|s| s.turbopuffer_api_key.clone()), String::new()),
+        );
 
         (
             Self {
@@ -89,6 +91,7 @@ mod tests {
         let file = FileConfig {
             store: Some(FileStoreConfig {
                 provider: Some("milvus".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -104,6 +107,7 @@ mod tests {
         let file = FileConfig {
             store: Some(FileStoreConfig {
                 provider: Some("milvus".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -130,6 +134,7 @@ mod tests {
         let file = FileConfig {
             store: Some(FileStoreConfig {
                 provider: Some("milvus".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };

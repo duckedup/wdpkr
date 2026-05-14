@@ -1,4 +1,4 @@
-use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved, resolved_default};
+use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 use anyhow::{Result, bail};
 
 pub struct EmbedConfig {
@@ -51,10 +51,14 @@ impl EmbedConfig {
             "MEGAGREP_EMBED_BATCH_SIZE",
             file_or_resolved(f.and_then(|e| e.batch_size), 64),
         );
-        let voyage_api_key: Resolved<String> =
-            env_or_resolved("VOYAGE_API_KEY", resolved_default(String::new()));
-        let openai_api_key: Resolved<String> =
-            env_or_resolved("OPENAI_API_KEY", resolved_default(String::new()));
+        let voyage_api_key: Resolved<String> = env_or_resolved(
+            "VOYAGE_API_KEY",
+            file_or_resolved(f.and_then(|e| e.voyage_api_key.clone()), String::new()),
+        );
+        let openai_api_key: Resolved<String> = env_or_resolved(
+            "OPENAI_API_KEY",
+            file_or_resolved(f.and_then(|e| e.openai_api_key.clone()), String::new()),
+        );
         let ollama_host: Resolved<String> = env_or_resolved(
             "OLLAMA_HOST",
             file_or_resolved(
@@ -194,6 +198,7 @@ mod tests {
                 model: None,
                 batch_size: Some(16),
                 ollama_host: Some("http://ollama.internal:11434".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };

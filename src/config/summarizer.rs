@@ -1,4 +1,4 @@
-use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved, resolved_default};
+use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 use anyhow::{Result, bail};
 
 pub struct SummarizerConfig {
@@ -33,8 +33,10 @@ impl SummarizerConfig {
                 "claude-haiku-4-5-20251001".into(),
             ),
         );
-        let api_key: Resolved<String> =
-            env_or_resolved("ANTHROPIC_API_KEY", resolved_default(String::new()));
+        let api_key: Resolved<String> = env_or_resolved(
+            "ANTHROPIC_API_KEY",
+            file_or_resolved(f.and_then(|s| s.anthropic_api_key.clone()), String::new()),
+        );
 
         (
             Self {
@@ -107,6 +109,7 @@ mod tests {
             summarizer: Some(FileSummarizerConfig {
                 provider: None,
                 model: Some("claude-opus-4-7".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -123,6 +126,7 @@ mod tests {
             summarizer: Some(FileSummarizerConfig {
                 provider: None,
                 model: Some("claude-opus-4-7".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };

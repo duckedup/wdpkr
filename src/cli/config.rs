@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::config::{DEFAULT_CONFIG_YAML, FileConfig, ResolvedConfig};
+use crate::config::{FileConfig, ResolvedConfig};
 
 #[derive(Args, Debug)]
 pub struct ConfigArgs {
@@ -52,20 +52,125 @@ async fn run_init() -> Result<()> {
             path.display()
         );
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    // Write the template verbatim (not via serde) to preserve comments.
-    std::fs::write(&path, DEFAULT_CONFIG_YAML)
-        .with_context(|| format!("writing {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    println!("Wrote default config to {}", path.display());
+
+    println!("megagrep config init — setting up ~/.config/megagrep/config.yaml\n");
+
+    // ── Vector store ──
+    let store_provider = prompt_choice("Vector store provider", &["turbopuffer"], "turbopuffer")?;
+    let turbopuffer_key = prompt_secret("Turbopuffer API key (TURBOPUFFER_API_KEY)")?;
+
+    // ── Embedder ──
+    let embed_provider = prompt_choice(
+        "Embedding provider",
+        &["voyage", "ollama", "openai"],
+        "voyage",
+    )?;
+    let embed_model = match embed_provider.as_str() {
+        "voyage" => prompt_choice(
+            "Embedding model",
+            &["voyage-code-3", "voyage-3-large", "voyage-3-lite"],
+            "voyage-code-3",
+        )?,
+        "ollama" => prompt_choice("Embedding model", &["nomic-embed-text"], "nomic-embed-text")?,
+        "openai" => prompt_choice(
+            "Embedding model",
+            &["text-embedding-3-large", "text-embedding-3-small"],
+            "text-embedding-3-large",
+        )?,
+        _ => "voyage-code-3".into(),
+    };
+
+    let voyage_key = if embed_provider == "voyage" {
+        prompt_secret("Voyage API key (VOYAGE_API_KEY)")?
+    } else {
+        String::new()
+    };
+    let openai_key = if embed_provider == "openai" {
+        prompt_secret("OpenAI API key (OPENAI_API_KEY)")?
+    } else {
+        String::new()
+    };
+
+    // ── Summarizer ──
+    let summarizer_provider = prompt_choice("Summarizer provider", &["anthropic"], "anthropic")?;
+    let summarizer_model = prompt_choice(
+        "Summarizer model",
+        &["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+        "claude-haiku-4-5-20251001",
+    )?;
+    let anthropic_key = prompt_secret("Anthropic API key (ANTHROPIC_API_KEY)")?;
+
+    // ── Build FileConfig ──
+    let file_config = FileConfig {
+        store: Some(crate::config::FileStoreConfig {
+            provider: Some(store_provider),
+            turbopuffer_api_key: non_empty(turbopuffer_key),
+        }),
+        embedder: Some(crate::config::FileEmbedConfig {
+            provider: Some(embed_provider),
+            model: Some(embed_model),
+            voyage_api_key: non_empty(voyage_key),
+            openai_api_key: non_empty(openai_key),
+            ..Default::default()
+        }),
+        summarizer: Some(crate::config::FileSummarizerConfig {
+            provider: Some(summarizer_provider),
+            model: Some(summarizer_model),
+            anthropic_api_key: non_empty(anthropic_key),
+        }),
+        ..Default::default()
+    };
+
+    let saved_path = file_config.save()?;
+    println!("\nConfig saved to {}", saved_path.display());
+    println!("API keys are stored in this file (mode 0600). Env vars override file values.");
     Ok(())
+}
+
+fn prompt_choice(label: &str, options: &[&str], default: &str) -> Result<String> {
+    if options.len() == 1 {
+        println!("{label}: {default}");
+        return Ok(default.to_string());
+    }
+    eprint!("{label}");
+    for (i, opt) in options.iter().enumerate() {
+        let marker = if *opt == default { " (default)" } else { "" };
+        eprint!("\n  {}) {opt}{marker}", i + 1);
+    }
+    eprint!("\nChoice [{}]: ", default);
+
+    let input = read_line()?;
+    if input.is_empty() {
+        return Ok(default.to_string());
+    }
+    if let Ok(idx) = input.parse::<usize>()
+        && idx >= 1
+        && idx <= options.len()
+    {
+        return Ok(options[idx - 1].to_string());
+    }
+    if options.contains(&input.as_str()) {
+        return Ok(input);
+    }
+    eprintln!("  Using default: {default}");
+    Ok(default.to_string())
+}
+
+fn prompt_secret(label: &str) -> Result<String> {
+    eprint!("{label} (Enter to skip): ");
+    read_line()
+}
+
+fn read_line() -> Result<String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .context("reading input")?;
+    Ok(input.trim().to_string())
+}
+
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
 }
 
 async fn run_get(key: &str) -> Result<()> {
@@ -185,67 +290,86 @@ mod tests {
         teardown(&tmp);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn init_creates_default_config() {
-        let tmp = clear_and_setup("init");
-        run(ConfigArgs {
-            command: ConfigCommand::Init,
-        })
-        .await
-        .unwrap();
-
-        let path = FileConfig::path().unwrap();
-        assert!(path.exists(), "config file should exist after init");
+    fn file_config_save_writes_providers_and_keys() {
+        let tmp = clear_and_setup("save-config");
+        let file_config = FileConfig {
+            store: Some(crate::config::FileStoreConfig {
+                provider: Some("turbopuffer".into()),
+                turbopuffer_api_key: Some("tp-key-123".into()),
+            }),
+            embedder: Some(crate::config::FileEmbedConfig {
+                provider: Some("voyage".into()),
+                model: Some("voyage-code-3".into()),
+                voyage_api_key: Some("voy-key".into()),
+                ..Default::default()
+            }),
+            summarizer: Some(crate::config::FileSummarizerConfig {
+                provider: Some("anthropic".into()),
+                model: Some("claude-haiku-4-5-20251001".into()),
+                anthropic_api_key: Some("ant-key".into()),
+            }),
+            ..Default::default()
+        };
+        let path = file_config.save().unwrap();
+        assert!(path.exists());
 
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            content.contains("provider: turbopuffer"),
-            "should contain default store provider"
-        );
-        assert!(
-            content.contains("# Every field is optional"),
-            "should preserve template comments"
-        );
+        assert!(content.contains("turbopuffer"), "store provider: {content}");
+        assert!(content.contains("tp-key-123"), "store key: {content}");
+        assert!(content.contains("voyage-code-3"), "embed model: {content}");
+        assert!(content.contains("voy-key"), "voyage key: {content}");
+        assert!(content.contains("ant-key"), "anthropic key: {content}");
 
         teardown(&tmp);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn init_errors_if_file_exists() {
-        let tmp = clear_and_setup("init-exists");
-        run(ConfigArgs {
-            command: ConfigCommand::Init,
-        })
-        .await
-        .unwrap();
+    fn api_key_resolves_from_file() {
+        let tmp = clear_and_setup("key-from-file");
+        let file_config = FileConfig {
+            store: Some(crate::config::FileStoreConfig {
+                provider: Some("turbopuffer".into()),
+                turbopuffer_api_key: Some("file-tp-key".into()),
+            }),
+            summarizer: Some(crate::config::FileSummarizerConfig {
+                anthropic_api_key: Some("file-ant-key".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        file_config.save().unwrap();
 
-        let err = run(ConfigArgs {
-            command: ConfigCommand::Init,
-        })
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("already exists"));
+        let resolved = ResolvedConfig::new().unwrap();
+        assert_eq!(resolved.config.store.api_key, "file-tp-key");
+        assert_eq!(resolved.config.summarizer.api_key, "file-ant-key");
 
         teardown(&tmp);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    #[cfg(unix)]
-    async fn init_sets_0600_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = clear_and_setup("init-perms");
-        run(ConfigArgs {
-            command: ConfigCommand::Init,
-        })
-        .await
-        .unwrap();
+    fn env_overrides_file_api_key() {
+        use crate::config::test_helpers::set_env;
+        let tmp = clear_and_setup("key-env-override");
+        let file_config = FileConfig {
+            store: Some(crate::config::FileStoreConfig {
+                turbopuffer_api_key: Some("file-key".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        file_config.save().unwrap();
 
-        let path = FileConfig::path().unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        set_env("TURBOPUFFER_API_KEY", "env-key");
+        let resolved = ResolvedConfig::new().unwrap();
+        assert_eq!(resolved.config.store.api_key, "env-key");
+        assert_eq!(
+            resolved.sources.store.api_key,
+            crate::config::Source::Env("TURBOPUFFER_API_KEY")
+        );
 
         teardown(&tmp);
     }

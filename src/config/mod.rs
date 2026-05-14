@@ -319,6 +319,8 @@ pub struct FileConfig {
 pub struct FileStoreConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turbopuffer_api_key: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
@@ -331,6 +333,10 @@ pub struct FileEmbedConfig {
     pub batch_size: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voyage_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_api_key: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
@@ -339,6 +345,8 @@ pub struct FileSummarizerConfig {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic_api_key: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
@@ -447,11 +455,23 @@ impl FileConfig {
             "embedder.ollama_host" => {
                 self.embedder.get_or_insert_default().ollama_host = Some(value.into());
             }
+            "embedder.voyage_api_key" => {
+                self.embedder.get_or_insert_default().voyage_api_key = Some(value.into());
+            }
+            "embedder.openai_api_key" => {
+                self.embedder.get_or_insert_default().openai_api_key = Some(value.into());
+            }
+            "store.turbopuffer_api_key" => {
+                self.store.get_or_insert_default().turbopuffer_api_key = Some(value.into());
+            }
             "summarizer.provider" => {
                 self.summarizer.get_or_insert_default().provider = Some(value.into());
             }
             "summarizer.model" => {
                 self.summarizer.get_or_insert_default().model = Some(value.into());
+            }
+            "summarizer.anthropic_api_key" => {
+                self.summarizer.get_or_insert_default().anthropic_api_key = Some(value.into());
             }
             "indexer.namespace" => {
                 self.indexer.get_or_insert_default().namespace = Some(value.into());
