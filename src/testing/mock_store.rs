@@ -131,6 +131,22 @@ impl VectorStore for MockVectorStore {
         Ok(())
     }
 
+    async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>> {
+        let lock = self.namespaces.lock().unwrap();
+        let ns_data = lock
+            .get(ns.as_str())
+            .ok_or_else(|| anyhow::anyhow!("namespace '{}' not found", ns.as_str()))?;
+        let mut hashes = HashMap::new();
+        for doc in ns_data.documents.values() {
+            if doc.chunk_kind == crate::store::ChunkKind::File
+                && let Some(ref hash) = doc.content_hash
+            {
+                hashes.insert(doc.file_path.clone(), hash.clone());
+            }
+        }
+        Ok(hashes)
+    }
+
     async fn search(
         &self,
         ns: &Namespace,
@@ -226,6 +242,7 @@ mod tests {
             start_line: None,
             end_line: None,
             language: Some("rust".into()),
+            content_hash: None,
         }
     }
 

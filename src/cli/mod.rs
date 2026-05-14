@@ -127,7 +127,7 @@ mod tests {
             Command::Index(args) => {
                 assert!(!args.full);
                 assert!(!args.dry_run);
-                assert!(args.concurrency.is_none());
+                assert_eq!(args.concurrency, 4);
                 assert!(args.from.is_none());
                 assert!(args.max_cost.is_none());
             }
@@ -154,7 +154,7 @@ mod tests {
             Command::Index(args) => {
                 assert!(args.full);
                 assert!(args.dry_run);
-                assert_eq!(args.concurrency, Some(16));
+                assert_eq!(args.concurrency, 16);
                 assert_eq!(args.from.as_deref(), Some("abc123"));
                 assert_eq!(args.max_cost, Some(100.0));
             }

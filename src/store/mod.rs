@@ -47,6 +47,10 @@ pub trait VectorStore: Send + Sync {
     /// incremental indexing.
     async fn delete_by_file(&self, ns: &Namespace, file_path: &str) -> Result<()>;
 
+    /// Return a map of file_path → content_hash for all file-level documents
+    /// in the namespace. Used by the indexer to skip unchanged files.
+    async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>>;
+
     // ── Search ──
 
     async fn search(
@@ -134,6 +138,9 @@ pub struct VectorDocument {
     pub start_line: Option<u32>,
     pub end_line: Option<u32>,
     pub language: Option<String>,
+    /// blake3 hash of the source file content. Used by the indexer to skip
+    /// files whose content hasn't changed since last index.
+    pub content_hash: Option<String>,
 }
 
 // ── SearchOptions ─────────────────────────────────────────────────────────

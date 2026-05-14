@@ -1,5 +1,7 @@
 //! Per-file indexing pipeline: chunk → summarize → embed → build VectorDocuments.
 
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 
 use crate::chunk::{Chunker, detect_language};
@@ -10,6 +12,16 @@ use crate::summarize::{FileSummaryInput, Summarizer};
 
 pub struct PipelineResult {
     pub documents: Vec<VectorDocument>,
+    pub timing: PipelineTiming,
+    pub symbol_count: usize,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PipelineTiming {
+    pub chunk: Duration,
+    pub summarize: Duration,
+    pub embed: Duration,
 }
 
 /// Process a single file through the full indexing pipeline.
@@ -21,8 +33,16 @@ pub async fn process_file(
     embedder: &dyn Embedder,
 ) -> Result<PipelineResult> {
     let language = detect_language(file_path).unwrap_or("unknown");
-    let chunks = chunker.chunk(file_path, content, language)?;
+    let content_hash = blake3::hash(content.as_bytes()).to_hex()[..16].to_string();
 
+    // Chunk
+    let t0 = Instant::now();
+    let chunks = chunker.chunk(file_path, content, language)?;
+    let chunk_time = t0.elapsed();
+    let symbol_count = chunks.symbols.len();
+
+    // Summarize
+    let t1 = Instant::now();
     let file_input = FileSummaryInput {
         file_path: file_path.to_string(),
         content: content.to_string(),
@@ -37,7 +57,10 @@ pub async fn process_file(
         DEFAULT_TOKEN_THRESHOLD,
     )
     .await?;
+    let summarize_time = t1.elapsed();
 
+    // Embed
+    let t2 = Instant::now();
     let mut documents = Vec::new();
 
     // File-level document
@@ -53,6 +76,7 @@ pub async fn process_file(
         start_line: None,
         end_line: None,
         language: Some(language.to_string()),
+        content_hash: Some(content_hash.clone()),
     });
 
     // Symbol-level documents
@@ -73,10 +97,21 @@ pub async fn process_file(
             start_line: Some(sym.start_line),
             end_line: Some(sym.end_line),
             language: Some(language.to_string()),
+            content_hash: None,
         });
     }
+    let embed_time = t2.elapsed();
 
-    Ok(PipelineResult { documents })
+    Ok(PipelineResult {
+        documents,
+        timing: PipelineTiming {
+            chunk: chunk_time,
+            summarize: summarize_time,
+            embed: embed_time,
+        },
+        symbol_count,
+        content_hash,
+    })
 }
 
 /// Deterministic document ID: blake3 hash of (file_path, chunk_kind, symbol_name, content).
@@ -184,6 +219,27 @@ pub fn goodbye() {
     }
 
     #[tokio::test]
+    async fn process_rust_file_has_timing() {
+        let chunker = TreeSitterChunker::new();
+        let summarizer = MockSummarizer::new();
+        let embedder = MockEmbedder::new(8);
+
+        let result = process_file(
+            "src/greet.rs",
+            "pub fn hello() {}",
+            &chunker,
+            &summarizer,
+            &embedder,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.timing.chunk < Duration::from_secs(5));
+        assert!(result.timing.summarize < Duration::from_secs(5));
+        assert!(result.timing.embed < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
     async fn process_unknown_language_file() {
         let chunker = TreeSitterChunker::new();
         let summarizer = MockSummarizer::new();
@@ -202,6 +258,7 @@ pub fn goodbye() {
         // File-level only, no symbols
         assert_eq!(result.documents.len(), 1);
         assert_eq!(result.documents[0].chunk_kind, ChunkKind::File);
+        assert_eq!(result.symbol_count, 0);
     }
 
     #[tokio::test]

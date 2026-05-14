@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Result, bail};
 use clap::Args;
 
@@ -19,9 +21,9 @@ pub struct IndexArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Bound parallel API calls
-    #[arg(long)]
-    pub concurrency: Option<usize>,
+    /// Bound parallel file processing (default: 4)
+    #[arg(long, default_value = "4")]
+    pub concurrency: usize,
 
     /// Override starting SHA for diff (manual recovery)
     #[arg(long)]
@@ -47,7 +49,7 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     config.summarizer.validate()?;
 
     let namespace = resolve_namespace(&config)?;
-    let chunker: Box<dyn crate::chunk::Chunker> = Box::new(TreeSitterChunker::new());
+    let chunker: Arc<dyn crate::chunk::Chunker> = Arc::new(TreeSitterChunker::new());
     let summarizer = build_summarizer(&config.summarizer)?;
     let embedder = build_embedder(&config.embed).await?;
     let store = build_store(&config.store, embedder.dimension())?;
@@ -60,12 +62,21 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     );
 
     let root = std::env::current_dir()?;
-    let index_run = IndexRun::new(chunker, summarizer, embedder, store, namespace);
+    let index_run = IndexRun::new(
+        chunker,
+        Arc::from(summarizer),
+        Arc::from(embedder),
+        Arc::from(store),
+        namespace,
+        args.concurrency,
+    );
     let report = index_run.run(args.full, &root).await?;
 
     eprintln!(
-        "Done: {} files processed, {} failed, {} vectors upserted, {} deleted",
+        "\nDone in {:.1}s: {} processed, {} skipped (unchanged), {} failed, {} vectors upserted, {} deleted",
+        report.elapsed.as_secs_f64(),
         report.files_processed,
+        report.files_skipped,
         report.files_failed,
         report.vectors_upserted,
         report.vectors_deleted

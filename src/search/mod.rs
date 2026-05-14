@@ -215,6 +215,7 @@ mod tests {
                 start_line: None,
                 end_line: None,
                 language: Some("rust".into()),
+                content_hash: None,
             },
             VectorDocument {
                 id: "s-release".into(),
@@ -227,6 +228,7 @@ mod tests {
                 start_line: Some(42),
                 end_line: Some(78),
                 language: Some("rust".into()),
+                content_hash: None,
             },
             VectorDocument {
                 id: "s-correct".into(),
@@ -239,6 +241,7 @@ mod tests {
                 start_line: Some(80),
                 end_line: Some(95),
                 language: Some("rust".into()),
+                content_hash: None,
             },
             // Auth module — close to [0,1,0]
             VectorDocument {
@@ -252,6 +255,7 @@ mod tests {
                 start_line: None,
                 end_line: None,
                 language: Some("rust".into()),
+                content_hash: None,
             },
             VectorDocument {
                 id: "s-authenticate".into(),
@@ -264,6 +268,7 @@ mod tests {
                 start_line: Some(10),
                 end_line: Some(30),
                 language: Some("rust".into()),
+                content_hash: None,
             },
             // API module — close to [0,0,1]
             VectorDocument {
@@ -277,6 +282,7 @@ mod tests {
                 start_line: None,
                 end_line: None,
                 language: Some("rust".into()),
+                content_hash: None,
             },
             VectorDocument {
                 id: "s-handle".into(),
@@ -289,6 +295,7 @@ mod tests {
                 start_line: Some(5),
                 end_line: Some(20),
                 language: Some("rust".into()),
+                content_hash: None,
             },
         ];
         store.upsert(&Namespace::from("test"), &docs).await.unwrap();

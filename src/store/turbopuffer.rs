@@ -247,6 +247,43 @@ impl VectorStore for TurbopufferStore {
         Ok(())
     }
 
+    async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>> {
+        let url = format!("{}/query", self.ns_url(ns));
+
+        let body = QueryRequest {
+            filters: Some(serde_json::json!([
+                "And",
+                [
+                    ["chunk_kind", "Eq", "file"],
+                    ["id", "NotEq", META_VECTOR_ID]
+                ]
+            ])),
+            include_attributes: Some(serde_json::json!(["file_path", "content_hash"])),
+            limit: Some(10_000),
+            include_vectors: Some(false),
+            ..Default::default()
+        };
+
+        let resp = self.post_json(&url, &body).await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            bail!("get_content_hashes failed: {err}");
+        }
+
+        let query_resp: QueryResponse =
+            resp.json().await.context("parsing content hash response")?;
+        let mut hashes = HashMap::new();
+        for row in query_resp.rows {
+            if let (Some(path), Some(hash)) = (
+                row.get("file_path").and_then(|v| v.as_str()),
+                row.get("content_hash").and_then(|v| v.as_str()),
+            ) {
+                hashes.insert(path.to_string(), hash.to_string());
+            }
+        }
+        Ok(hashes)
+    }
+
     async fn search(
         &self,
         ns: &Namespace,
@@ -356,6 +393,9 @@ fn doc_to_row(doc: &VectorDocument) -> HashMap<String, serde_json::Value> {
     if let Some(ref lang) = doc.language {
         row.insert("language".into(), serde_json::json!(lang));
     }
+    if let Some(ref hash) = doc.content_hash {
+        row.insert("content_hash".into(), serde_json::json!(hash));
+    }
     row
 }
 
@@ -458,6 +498,8 @@ struct QueryRequest {
     include_attributes: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     aggregate_by: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_vectors: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -548,6 +590,7 @@ mod tests {
             start_line: None,
             end_line: None,
             language: Some("rust".into()),
+            content_hash: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["id"], "test-1");
@@ -572,6 +615,7 @@ mod tests {
             start_line: Some(10),
             end_line: Some(25),
             language: Some("rust".into()),
+            content_hash: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["symbol_name"], "process");
@@ -593,6 +637,7 @@ mod tests {
             start_line: None,
             end_line: None,
             language: None,
+            content_hash: None,
         };
         let body = WriteRequest {
             upsert_rows: Some(vec![doc_to_row(&doc)]),
@@ -1077,6 +1122,7 @@ mod tests {
             start_line: Some(100),
             end_line: Some(200),
             language: Some("rust".into()),
+            content_hash: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 10); // id, vector, summary, file_path, chunk_kind + 5 optional
@@ -1102,6 +1148,7 @@ mod tests {
             start_line: None,
             end_line: None,
             language: None,
+            content_hash: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 5); // id, vector, summary, file_path, chunk_kind
