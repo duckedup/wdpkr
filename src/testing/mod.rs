@@ -34,6 +34,7 @@ pub fn sample_document(file_path: &str, chunk_kind: ChunkKind) -> VectorDocument
         start_line: None,
         end_line: None,
         language: Some("rust".into()),
+        content_hash: None,
     }
 }
 
@@ -56,6 +57,7 @@ pub fn sample_symbol_document(
         start_line: Some(start_line),
         end_line: Some(end_line),
         language: Some("rust".into()),
+        content_hash: None,
     }
 }
 

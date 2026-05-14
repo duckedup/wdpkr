@@ -128,11 +128,12 @@ fn cleanup(dir: &Path) {
 
 fn build_index_run(store: MockVectorStore, embedder: MockEmbedder) -> IndexRun {
     IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(embedder),
-        Box::new(store),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(embedder),
+        Arc::new(store),
         Namespace::from("test-e2e"),
+        1,
     )
 }
 
@@ -203,11 +204,12 @@ async fn index_then_search_round_trip() {
 
     // Index
     let index = IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(MockEmbedder::new(8)),
-        Box::new(ArcStore(store.clone())),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
         ns.clone(),
+        1,
     );
     let report = index.run(true, &dir).await.unwrap();
     assert!(report.vectors_upserted > 0);
@@ -252,11 +254,12 @@ async fn search_finds_indexed_file_paths() {
     let ns = Namespace::from("test-paths");
 
     let index = IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(MockEmbedder::new(8)),
-        Box::new(ArcStore(store.clone())),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
         ns.clone(),
+        1,
     );
     index.run(true, &dir).await.unwrap();
 
@@ -295,11 +298,12 @@ async fn symbols_appear_nested_under_files() {
     let ns = Namespace::from("test-symbols");
 
     let index = IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(MockEmbedder::new(8)),
-        Box::new(ArcStore(store.clone())),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
         ns.clone(),
+        1,
     );
     index.run(true, &dir).await.unwrap();
 
@@ -349,11 +353,12 @@ async fn scope_filter_limits_results_after_index() {
     let ns = Namespace::from("test-scope");
 
     let index = IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(MockEmbedder::new(8)),
-        Box::new(ArcStore(store.clone())),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
         ns.clone(),
+        1,
     );
     index.run(true, &dir).await.unwrap();
 
@@ -395,11 +400,12 @@ async fn incremental_index_only_processes_changed_files() {
 
     // Full index
     let index = IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(MockEmbedder::new(8)),
-        Box::new(ArcStore(store.clone())),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
         ns.clone(),
+        1,
     );
     let report1 = index.run(true, &dir).await.unwrap();
     let initial_count = report1.files_processed;
@@ -415,11 +421,12 @@ async fn incremental_index_only_processes_changed_files() {
 
     // Incremental index (full=false)
     let index2 = IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(MockEmbedder::new(8)),
-        Box::new(ArcStore(store.clone())),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
         ns.clone(),
+        1,
     );
     let report2 = index2.run(false, &dir).await.unwrap();
 
@@ -442,11 +449,12 @@ async fn json_output_is_valid_after_full_pipeline() {
     let ns = Namespace::from("test-json");
 
     let index = IndexRun::new(
-        Box::new(TreeSitterChunker::new()),
-        Box::new(MockSummarizer::new()),
-        Box::new(MockEmbedder::new(8)),
-        Box::new(ArcStore(store.clone())),
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
         ns.clone(),
+        1,
     );
     index.run(true, &dir).await.unwrap();
 
@@ -519,6 +527,12 @@ impl VectorStore for ArcStore {
     }
     async fn delete_by_file(&self, ns: &Namespace, file_path: &str) -> anyhow::Result<()> {
         self.0.delete_by_file(ns, file_path).await
+    }
+    async fn get_content_hashes(
+        &self,
+        ns: &Namespace,
+    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        self.0.get_content_hashes(ns).await
     }
     async fn search(
         &self,
