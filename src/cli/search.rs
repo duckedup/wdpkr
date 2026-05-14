@@ -40,7 +40,7 @@ pub async fn run(args: SearchArgs) -> Result<()> {
 
     let namespace = resolve_namespace(&config)?;
     let embedder = build_embedder(&config.embed).await?;
-    let store = build_store(&config.store)?;
+    let store = build_store(&config.store, embedder.dimension())?;
 
     let params = SearchParams {
         query: args.query.clone(),

@@ -50,7 +50,7 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     let chunker: Box<dyn crate::chunk::Chunker> = Box::new(TreeSitterChunker::new());
     let summarizer = build_summarizer(&config.summarizer)?;
     let embedder = build_embedder(&config.embed).await?;
-    let store = build_store(&config.store)?;
+    let store = build_store(&config.store, embedder.dimension())?;
 
     eprintln!(
         "Indexing into namespace '{}' with {}/{}...",

@@ -1,8 +1,8 @@
-//! Turbopuffer vector store adapter.
+//! Turbopuffer vector store adapter (v2 API).
 //!
-//! Implements [`VectorStore`] against Turbopuffer's HTTP API. Metadata
+//! Implements [`VectorStore`] against Turbopuffer's v2 HTTP API. Metadata
 //! (HWM SHA, embedder identity) is stored as a reserved vector with ID
-//! `__megagrep_meta__` — portable across API versions.
+//! `__megagrep_meta__`.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -25,10 +25,11 @@ pub struct TurbopufferStore {
     client: reqwest::Client,
     api_key: String,
     base_url: String,
+    dimension: usize,
 }
 
 impl TurbopufferStore {
-    pub fn new(config: &StoreConfig) -> Result<Self> {
+    pub fn new(config: &StoreConfig, dimension: usize) -> Result<Self> {
         if config.api_key.is_empty() {
             bail!("TURBOPUFFER_API_KEY is required");
         }
@@ -36,6 +37,7 @@ impl TurbopufferStore {
             client: reqwest::Client::new(),
             api_key: config.api_key.clone(),
             base_url: "https://api.turbopuffer.com".into(),
+            dimension,
         })
     }
 
@@ -88,9 +90,11 @@ impl TurbopufferStore {
 impl VectorStore for TurbopufferStore {
     async fn create_namespace(&self, ns: &Namespace, dimension: usize) -> Result<()> {
         let meta = NamespaceMetadata::default();
-        let meta_vec = metadata_to_vector(&meta, dimension);
-        let body = UpsertRequest {
-            upserts: vec![meta_vec],
+        let row = metadata_to_row(&meta, dimension);
+        let body = WriteRequest {
+            upsert_rows: Some(vec![row]),
+            distance_metric: Some("cosine_distance".into()),
+            ..Default::default()
         };
         let resp = self.post_json(&self.ns_url(ns), &body).await?;
         if !resp.status().is_success() {
@@ -130,13 +134,12 @@ impl VectorStore for TurbopufferStore {
     }
 
     async fn namespace_exists(&self, ns: &Namespace) -> Result<bool> {
-        // Turbopuffer is serverless — no dedicated "get namespace" endpoint.
-        // Probe via a minimal query: 200 = exists, 404 = not found.
         let url = format!("{}/query", self.ns_url(ns));
-        let body = serde_json::json!({
-            "top_k": 1,
-            "include_attributes": false,
-        });
+        let body = QueryRequest {
+            aggregate_by: Some(serde_json::json!({"n": ["Count"]})),
+            limit: Some(1),
+            ..Default::default()
+        };
         let resp = self
             .client
             .post(url)
@@ -158,13 +161,13 @@ impl VectorStore for TurbopufferStore {
 
     async fn get_metadata(&self, ns: &Namespace) -> Result<NamespaceMetadata> {
         let url = format!("{}/query", self.ns_url(ns));
+        let zero_vec: Vec<f32> = vec![0.0; self.dimension];
         let body = QueryRequest {
-            vector: vec![0.0; 1],
-            top_k: 1,
-            filters: Some(serde_json::json!({
-                "id": ["Eq", META_VECTOR_ID]
-            })),
-            include_attributes: true,
+            rank_by: Some(serde_json::json!(["vector", "ANN", zero_vec])),
+            limit: Some(1),
+            filters: Some(serde_json::json!(["id", "Eq", META_VECTOR_ID])),
+            include_attributes: Some(serde_json::json!(true)),
+            ..Default::default()
         };
 
         let resp = self.post_json(&url, &body).await?;
@@ -174,25 +177,18 @@ impl VectorStore for TurbopufferStore {
         }
 
         let query_resp: QueryResponse = resp.json().await.context("parsing metadata response")?;
-        match query_resp.results.first() {
-            Some(result) => vector_to_metadata(result),
+        match query_resp.rows.first() {
+            Some(row) => row_to_metadata(row),
             None => Ok(NamespaceMetadata::default()),
         }
     }
 
     async fn set_metadata(&self, ns: &Namespace, meta: &NamespaceMetadata) -> Result<()> {
-        let existing = self.get_metadata(ns).await.ok();
-        let dimension = if let Some(ref _existing) = existing {
-            // Preserve the dimension from the existing meta vector.
-            // We use a small dimension for the meta vector itself.
-            1
-        } else {
-            1
-        };
-
-        let meta_vec = metadata_to_vector(meta, dimension);
-        let body = UpsertRequest {
-            upserts: vec![meta_vec],
+        let row = metadata_to_row(meta, self.dimension);
+        let body = WriteRequest {
+            upsert_rows: Some(vec![row]),
+            distance_metric: Some("cosine_distance".into()),
+            ..Default::default()
         };
         let resp = self.post_json(&self.ns_url(ns), &body).await?;
         if !resp.status().is_success() {
@@ -205,8 +201,13 @@ impl VectorStore for TurbopufferStore {
     async fn upsert(&self, ns: &Namespace, docs: &[VectorDocument]) -> Result<UpsertStats> {
         let mut upserted = 0;
         for chunk in docs.chunks(UPSERT_BATCH_SIZE) {
-            let upserts: Vec<UpsertVector> = chunk.iter().map(doc_to_upsert_vector).collect();
-            let body = UpsertRequest { upserts };
+            let rows: Vec<HashMap<String, serde_json::Value>> =
+                chunk.iter().map(doc_to_row).collect();
+            let body = WriteRequest {
+                upsert_rows: Some(rows),
+                distance_metric: Some("cosine_distance".into()),
+                ..Default::default()
+            };
             let resp = self.post_json(&self.ns_url(ns), &body).await?;
             if !resp.status().is_success() {
                 let err = resp.text().await.unwrap_or_default();
@@ -221,12 +222,11 @@ impl VectorStore for TurbopufferStore {
     }
 
     async fn delete_by_ids(&self, ns: &Namespace, ids: &[&str]) -> Result<()> {
-        let url = format!("{}/delete", self.ns_url(ns));
-        let body = DeleteRequest {
-            ids: ids.iter().map(|s| (*s).to_string()).collect(),
-            filters: None,
+        let body = WriteRequest {
+            deletes: Some(ids.iter().map(|s| serde_json::json!(s)).collect()),
+            ..Default::default()
         };
-        let resp = self.post_json(&url, &body).await?;
+        let resp = self.post_json(&self.ns_url(ns), &body).await?;
         if !resp.status().is_success() {
             let err = resp.text().await.unwrap_or_default();
             bail!("delete_by_ids failed: {err}");
@@ -235,14 +235,11 @@ impl VectorStore for TurbopufferStore {
     }
 
     async fn delete_by_file(&self, ns: &Namespace, file_path: &str) -> Result<()> {
-        let url = format!("{}/delete", self.ns_url(ns));
-        let body = DeleteRequest {
-            ids: vec![],
-            filters: Some(serde_json::json!({
-                "file_path": ["Eq", file_path]
-            })),
+        let body = WriteRequest {
+            delete_by_filter: Some(serde_json::json!(["file_path", "Eq", file_path])),
+            ..Default::default()
         };
-        let resp = self.post_json(&url, &body).await?;
+        let resp = self.post_json(&self.ns_url(ns), &body).await?;
         if !resp.status().is_success() {
             let err = resp.text().await.unwrap_or_default();
             bail!("delete_by_file failed: {err}");
@@ -257,35 +254,14 @@ impl VectorStore for TurbopufferStore {
         opts: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
         let url = format!("{}/query", self.ns_url(ns));
-
-        let mut filters = serde_json::Map::new();
-        // Exclude the metadata vector from search results.
-        filters.insert("id".into(), serde_json::json!(["NotEq", META_VECTOR_ID]));
-        if let Some(ref prefix) = opts.path_prefix {
-            filters.insert(
-                "file_path".into(),
-                serde_json::json!(["StartsWith", prefix]),
-            );
-        }
-        if let Some(ref kind) = opts.chunk_kind {
-            filters.insert(
-                "chunk_kind".into(),
-                serde_json::json!(["Eq", kind.to_string()]),
-            );
-        }
-        if let Some(ref lang) = opts.language {
-            filters.insert("language".into(), serde_json::json!(["Eq", lang]));
-        }
+        let filters = build_search_filters(opts);
 
         let body = QueryRequest {
-            vector: query_vector.to_vec(),
-            top_k: opts.top_k,
-            filters: if filters.is_empty() {
-                None
-            } else {
-                Some(serde_json::Value::Object(filters))
-            },
-            include_attributes: true,
+            rank_by: Some(serde_json::json!(["vector", "ANN", query_vector])),
+            limit: Some(opts.top_k),
+            filters,
+            include_attributes: Some(serde_json::json!(true)),
+            ..Default::default()
         };
 
         let resp = self.post_json(&url, &body).await?;
@@ -295,103 +271,146 @@ impl VectorStore for TurbopufferStore {
         }
 
         let query_resp: QueryResponse = resp.json().await.context("parsing search response")?;
-        let results = query_resp
-            .results
-            .into_iter()
-            .filter(|r| {
-                if let Some(min) = opts.min_score {
-                    r.dist >= min
-                } else {
-                    true
-                }
-            })
-            .map(query_result_to_search_result)
-            .collect::<Result<Vec<_>>>()?;
+        let results = score_and_filter_rows(query_resp.rows, opts.min_score)?;
 
         Ok(results)
     }
 }
 
+// ── Search logic (extracted for testability) ─────────────────────────────
+
+fn build_search_filters(opts: &SearchOptions) -> Option<serde_json::Value> {
+    let mut conditions: Vec<serde_json::Value> = Vec::new();
+    conditions.push(serde_json::json!(["id", "NotEq", META_VECTOR_ID]));
+
+    if let Some(ref prefix) = opts.path_prefix {
+        conditions.push(serde_json::json!([
+            "file_path",
+            "Glob",
+            format!("{prefix}*")
+        ]));
+    }
+    if let Some(ref kind) = opts.chunk_kind {
+        conditions.push(serde_json::json!(["chunk_kind", "Eq", kind.to_string()]));
+    }
+    if let Some(ref lang) = opts.language {
+        conditions.push(serde_json::json!(["language", "Eq", lang]));
+    }
+
+    if conditions.len() == 1 {
+        conditions.into_iter().next()
+    } else {
+        Some(serde_json::json!(["And", conditions]))
+    }
+}
+
+fn dist_to_score(dist: f32) -> f32 {
+    1.0 - dist
+}
+
+fn score_and_filter_rows(
+    rows: Vec<HashMap<String, serde_json::Value>>,
+    min_score: Option<f32>,
+) -> Result<Vec<SearchResult>> {
+    rows.into_iter()
+        .map(|row| {
+            let dist = row.get("$dist").and_then(|v| v.as_f64()).unwrap_or(2.0) as f32;
+            let score = dist_to_score(dist);
+            (row, score)
+        })
+        .filter(|(_, score)| {
+            if let Some(min) = min_score {
+                *score >= min
+            } else {
+                true
+            }
+        })
+        .map(|(row, score)| row_to_search_result(row, score))
+        .collect()
+}
+
 // ── Conversion helpers ────────────────────────────────────────────────────
 
-fn doc_to_upsert_vector(doc: &VectorDocument) -> UpsertVector {
-    let mut attrs = HashMap::new();
-    attrs.insert("file_path".into(), serde_json::json!(doc.file_path));
-    attrs.insert(
+fn doc_to_row(doc: &VectorDocument) -> HashMap<String, serde_json::Value> {
+    let mut row = HashMap::new();
+    row.insert("id".into(), serde_json::json!(doc.id));
+    row.insert("vector".into(), serde_json::json!(doc.vector));
+    row.insert("file_path".into(), serde_json::json!(doc.file_path));
+    row.insert(
         "chunk_kind".into(),
         serde_json::json!(doc.chunk_kind.to_string()),
     );
-    attrs.insert("summary".into(), serde_json::json!(doc.summary));
+    row.insert("summary".into(), serde_json::json!(doc.summary));
     if let Some(ref name) = doc.symbol_name {
-        attrs.insert("symbol_name".into(), serde_json::json!(name));
+        row.insert("symbol_name".into(), serde_json::json!(name));
     }
     if let Some(ref kind) = doc.symbol_kind {
-        attrs.insert("symbol_kind".into(), serde_json::json!(kind));
+        row.insert("symbol_kind".into(), serde_json::json!(kind));
     }
     if let Some(line) = doc.start_line {
-        attrs.insert("start_line".into(), serde_json::json!(line));
+        row.insert("start_line".into(), serde_json::json!(line));
     }
     if let Some(line) = doc.end_line {
-        attrs.insert("end_line".into(), serde_json::json!(line));
+        row.insert("end_line".into(), serde_json::json!(line));
     }
     if let Some(ref lang) = doc.language {
-        attrs.insert("language".into(), serde_json::json!(lang));
+        row.insert("language".into(), serde_json::json!(lang));
     }
-    UpsertVector {
-        id: doc.id.clone(),
-        vector: doc.vector.clone(),
-        attributes: attrs,
-    }
+    row
 }
 
-fn metadata_to_vector(meta: &NamespaceMetadata, dimension: usize) -> UpsertVector {
-    let mut attrs = HashMap::new();
-    attrs.insert("__is_meta__".into(), serde_json::json!(true));
+fn metadata_to_row(
+    meta: &NamespaceMetadata,
+    dimension: usize,
+) -> HashMap<String, serde_json::Value> {
+    let mut row = HashMap::new();
+    row.insert("id".into(), serde_json::json!(META_VECTOR_ID));
+    row.insert("vector".into(), serde_json::json!(vec![0.0f32; dimension]));
+    row.insert("__is_meta__".into(), serde_json::json!(true));
     if let Some(ref sha) = meta.hwm_sha {
-        attrs.insert("hwm_sha".into(), serde_json::json!(sha));
+        row.insert("hwm_sha".into(), serde_json::json!(sha));
     }
     if let Some(ref embedder) = meta.embedder {
-        attrs.insert("embedder".into(), serde_json::json!(embedder));
+        row.insert("embedder".into(), serde_json::json!(embedder));
     }
     for (k, v) in &meta.extra {
-        attrs.insert(k.clone(), serde_json::json!(v));
+        row.insert(k.clone(), serde_json::json!(v));
     }
-    UpsertVector {
-        id: META_VECTOR_ID.into(),
-        vector: vec![0.0; dimension],
-        attributes: attrs,
-    }
+    row
 }
 
-fn vector_to_metadata(result: &QueryResult) -> Result<NamespaceMetadata> {
-    let attrs = result.attributes.as_ref().cloned().unwrap_or_default();
+fn row_to_metadata(row: &HashMap<String, serde_json::Value>) -> Result<NamespaceMetadata> {
     Ok(NamespaceMetadata {
-        hwm_sha: attrs
+        hwm_sha: row
             .get("hwm_sha")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        embedder: attrs
+        embedder: row
             .get("embedder")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        extra: attrs
+        extra: row
             .iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "hwm_sha" | "embedder" | "__is_meta__"))
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "id" | "vector" | "$dist" | "hwm_sha" | "embedder" | "__is_meta__"
+                )
+            })
             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
             .collect(),
     })
 }
 
-fn query_result_to_search_result(r: QueryResult) -> Result<SearchResult> {
-    let attrs = r.attributes.unwrap_or_default();
+fn row_to_search_result(
+    row: HashMap<String, serde_json::Value>,
+    score: f32,
+) -> Result<SearchResult> {
     let get_str = |key: &str| -> Option<String> {
-        attrs
-            .get(key)
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+        row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
     };
     let get_u32 =
-        |key: &str| -> Option<u32> { attrs.get(key).and_then(|v| v.as_u64()).map(|n| n as u32) };
+        |key: &str| -> Option<u32> { row.get(key).and_then(|v| v.as_u64()).map(|n| n as u32) };
 
     let chunk_kind_str = get_str("chunk_kind").unwrap_or_else(|| "file".into());
     let chunk_kind = match chunk_kind_str.as_str() {
@@ -400,8 +419,8 @@ fn query_result_to_search_result(r: QueryResult) -> Result<SearchResult> {
     };
 
     Ok(SearchResult {
-        id: r.id,
-        score: r.dist,
+        id: get_str("id").unwrap_or_default(),
+        score,
         file_path: get_str("file_path").unwrap_or_default(),
         chunk_kind,
         symbol_name: get_str("symbol_name"),
@@ -413,47 +432,38 @@ fn query_result_to_search_result(r: QueryResult) -> Result<SearchResult> {
     })
 }
 
-// ── HTTP types ────────────────────────────────────────────────────────────
+// ── HTTP types (v2 API) ──────────────────────────────────────────────────
 
-#[derive(Serialize)]
-struct UpsertRequest {
-    upserts: Vec<UpsertVector>,
+#[derive(Serialize, Default)]
+struct WriteRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upsert_rows: Option<Vec<HashMap<String, serde_json::Value>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deletes: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delete_by_filter: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    distance_metric: Option<String>,
 }
 
-#[derive(Serialize)]
-struct UpsertVector {
-    id: String,
-    vector: Vec<f32>,
-    attributes: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 struct QueryRequest {
-    vector: Vec<f32>,
-    top_k: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rank_by: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     filters: Option<serde_json::Value>,
-    include_attributes: bool,
-}
-
-#[derive(Serialize)]
-struct DeleteRequest {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    filters: Option<serde_json::Value>,
+    include_attributes: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregate_by: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
 struct QueryResponse {
-    results: Vec<QueryResult>,
-}
-
-#[derive(Deserialize)]
-struct QueryResult {
-    id: String,
-    dist: f32,
-    attributes: Option<HashMap<String, serde_json::Value>>,
+    #[serde(default)]
+    rows: Vec<HashMap<String, serde_json::Value>>,
 }
 
 fn backoff(attempt: usize) -> Duration {
@@ -462,9 +472,9 @@ fn backoff(attempt: usize) -> Duration {
 
 // ── build_store factory ───────────────────────────────────────────────────
 
-pub fn build_store(config: &StoreConfig) -> Result<Box<dyn VectorStore>> {
+pub fn build_store(config: &StoreConfig, dimension: usize) -> Result<Box<dyn VectorStore>> {
     match config.provider.as_str() {
-        "turbopuffer" => Ok(Box::new(TurbopufferStore::new(config)?)),
+        "turbopuffer" => Ok(Box::new(TurbopufferStore::new(config, dimension)?)),
         other => bail!("store provider '{other}' is not yet implemented"),
     }
 }
@@ -481,7 +491,7 @@ mod tests {
             provider: "turbopuffer".into(),
             api_key: String::new(),
         };
-        assert!(TurbopufferStore::new(&config).is_err());
+        assert!(TurbopufferStore::new(&config, 1024).is_err());
     }
 
     #[test]
@@ -490,8 +500,9 @@ mod tests {
             provider: "turbopuffer".into(),
             api_key: "test-key".into(),
         };
-        let store = TurbopufferStore::new(&config).unwrap();
+        let store = TurbopufferStore::new(&config, 1024).unwrap();
         assert_eq!(store.base_url, "https://api.turbopuffer.com");
+        assert_eq!(store.dimension, 1024);
     }
 
     #[test]
@@ -500,7 +511,7 @@ mod tests {
             provider: "turbopuffer".into(),
             api_key: "key".into(),
         };
-        let store = TurbopufferStore::new(&config)
+        let store = TurbopufferStore::new(&config, 512)
             .unwrap()
             .with_base_url("http://localhost:9090");
         assert_eq!(store.base_url, "http://localhost:9090");
@@ -514,7 +525,7 @@ mod tests {
             provider: "turbopuffer".into(),
             api_key: "key".into(),
         };
-        let store = TurbopufferStore::new(&config).unwrap();
+        let store = TurbopufferStore::new(&config, 1024).unwrap();
         let ns = Namespace::from("my-repo");
         assert_eq!(
             store.ns_url(&ns),
@@ -522,10 +533,10 @@ mod tests {
         );
     }
 
-    // ── Serialization ─────────────────────────────────────────────────
+    // ── Write request serialization ──────────────────────────────────
 
     #[test]
-    fn upsert_vector_serialization() {
+    fn upsert_row_serialization() {
         let doc = VectorDocument {
             id: "test-1".into(),
             vector: vec![0.1, 0.2],
@@ -538,16 +549,18 @@ mod tests {
             end_line: None,
             language: Some("rust".into()),
         };
-        let uv = doc_to_upsert_vector(&doc);
-        assert_eq!(uv.id, "test-1");
-        assert_eq!(uv.vector, vec![0.1, 0.2]);
-        assert_eq!(uv.attributes["file_path"], "src/main.rs");
-        assert_eq!(uv.attributes["chunk_kind"], "file");
-        assert!(!uv.attributes.contains_key("symbol_name"));
+        let row = doc_to_row(&doc);
+        assert_eq!(row["id"], "test-1");
+        assert_eq!(row["vector"].as_array().unwrap().len(), 2);
+        assert_eq!(row["file_path"], "src/main.rs");
+        assert_eq!(row["chunk_kind"], "file");
+        assert_eq!(row["summary"], "A test doc");
+        assert_eq!(row["language"], "rust");
+        assert!(!row.contains_key("symbol_name"));
     }
 
     #[test]
-    fn upsert_vector_with_symbol_fields() {
+    fn upsert_row_with_symbol_fields() {
         let doc = VectorDocument {
             id: "sym-1".into(),
             vector: vec![0.3],
@@ -560,74 +573,169 @@ mod tests {
             end_line: Some(25),
             language: Some("rust".into()),
         };
-        let uv = doc_to_upsert_vector(&doc);
-        assert_eq!(uv.attributes["symbol_name"], "process");
-        assert_eq!(uv.attributes["symbol_kind"], "function");
-        assert_eq!(uv.attributes["start_line"], 10);
-        assert_eq!(uv.attributes["end_line"], 25);
+        let row = doc_to_row(&doc);
+        assert_eq!(row["symbol_name"], "process");
+        assert_eq!(row["symbol_kind"], "function");
+        assert_eq!(row["start_line"], 10);
+        assert_eq!(row["end_line"], 25);
+    }
+
+    #[test]
+    fn write_request_upsert_format() {
+        let doc = VectorDocument {
+            id: "test-1".into(),
+            vector: vec![0.1, 0.2],
+            summary: "A doc".into(),
+            file_path: "src/main.rs".into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: None,
+        };
+        let body = WriteRequest {
+            upsert_rows: Some(vec![doc_to_row(&doc)]),
+            distance_metric: Some("cosine_distance".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json["upsert_rows"].is_array());
+        assert_eq!(json["upsert_rows"][0]["id"], "test-1");
+        assert_eq!(json["distance_metric"], "cosine_distance");
+        assert!(json.get("deletes").is_none());
+        assert!(json.get("delete_by_filter").is_none());
+    }
+
+    #[test]
+    fn write_request_delete_by_ids() {
+        let body = WriteRequest {
+            deletes: Some(vec![serde_json::json!("a"), serde_json::json!("b")]),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["deletes"].as_array().unwrap().len(), 2);
+        assert!(json.get("upsert_rows").is_none());
+    }
+
+    #[test]
+    fn write_request_delete_by_filter() {
+        let body = WriteRequest {
+            delete_by_filter: Some(serde_json::json!(["file_path", "Eq", "src/main.rs"])),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json["delete_by_filter"].is_array());
+        assert_eq!(json["delete_by_filter"][0], "file_path");
+        assert_eq!(json["delete_by_filter"][1], "Eq");
     }
 
     // ── Metadata round-trip ───────────────────────────────────────────
 
     #[test]
-    fn metadata_to_vector_and_back() {
+    fn metadata_to_row_and_back() {
         let meta = NamespaceMetadata {
             hwm_sha: Some("abc123".into()),
             embedder: Some("voyage/voyage-code-3".into()),
             extra: HashMap::new(),
         };
-        let uv = metadata_to_vector(&meta, 3);
-        assert_eq!(uv.id, META_VECTOR_ID);
-        assert_eq!(uv.vector.len(), 3);
-        assert_eq!(uv.attributes["hwm_sha"], "abc123");
-        assert_eq!(uv.attributes["embedder"], "voyage/voyage-code-3");
+        let row = metadata_to_row(&meta, 3);
+        assert_eq!(row["id"], META_VECTOR_ID);
+        assert_eq!(row["vector"], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(row["hwm_sha"], "abc123");
+        assert_eq!(row["embedder"], "voyage/voyage-code-3");
+        assert_eq!(row["__is_meta__"], true);
 
-        let qr = QueryResult {
-            id: META_VECTOR_ID.into(),
-            dist: 0.0,
-            attributes: Some(uv.attributes),
-        };
-        let back = vector_to_metadata(&qr).unwrap();
+        let back = row_to_metadata(&row).unwrap();
         assert_eq!(back.hwm_sha.as_deref(), Some("abc123"));
         assert_eq!(back.embedder.as_deref(), Some("voyage/voyage-code-3"));
     }
 
     #[test]
-    fn metadata_with_no_attributes_returns_defaults() {
-        let qr = QueryResult {
-            id: META_VECTOR_ID.into(),
-            dist: 0.0,
-            attributes: None,
-        };
-        let meta = vector_to_metadata(&qr).unwrap();
+    fn metadata_with_empty_row_returns_defaults() {
+        let row = HashMap::new();
+        let meta = row_to_metadata(&row).unwrap();
         assert!(meta.hwm_sha.is_none());
         assert!(meta.embedder.is_none());
+    }
+
+    // ── Query request serialization ──────────────────────────────────
+
+    #[test]
+    fn query_request_v2_format() {
+        let body = QueryRequest {
+            rank_by: Some(serde_json::json!(["vector", "ANN", [0.1, 0.2]])),
+            limit: Some(5),
+            filters: Some(serde_json::json!([
+                "And",
+                [
+                    ["id", "NotEq", META_VECTOR_ID],
+                    ["file_path", "Glob", "src/*"]
+                ]
+            ])),
+            include_attributes: Some(serde_json::json!(true)),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["rank_by"][0], "vector");
+        assert_eq!(json["rank_by"][1], "ANN");
+        assert_eq!(json["limit"], 5);
+        assert_eq!(json["filters"][0], "And");
+        assert_eq!(json["include_attributes"], true);
+        assert!(json.get("aggregate_by").is_none());
+    }
+
+    #[test]
+    fn query_request_aggregate_format() {
+        let body = QueryRequest {
+            aggregate_by: Some(serde_json::json!({"n": ["Count"]})),
+            limit: Some(1),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json["aggregate_by"]["n"].is_array());
+        assert!(json.get("rank_by").is_none());
+    }
+
+    #[test]
+    fn query_request_single_filter_no_and_wrapper() {
+        let body = QueryRequest {
+            rank_by: Some(serde_json::json!(["vector", "ANN", [0.1]])),
+            limit: Some(10),
+            filters: Some(serde_json::json!(["id", "NotEq", META_VECTOR_ID])),
+            include_attributes: Some(serde_json::json!(true)),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["filters"][0], "id");
+        assert_eq!(json["filters"][1], "NotEq");
     }
 
     // ── Query response parsing ────────────────────────────────────────
 
     #[test]
-    fn parse_query_response() {
+    fn parse_v2_query_response() {
         let json = r#"{
-            "results": [
+            "rows": [
                 {
+                    "$dist": 0.13,
                     "id": "doc-1",
-                    "dist": 0.87,
-                    "attributes": {
-                        "file_path": "src/main.rs",
-                        "chunk_kind": "file",
-                        "summary": "Entry point",
-                        "language": "rust"
-                    }
+                    "file_path": "src/main.rs",
+                    "chunk_kind": "file",
+                    "summary": "Entry point",
+                    "language": "rust"
                 }
             ]
         }"#;
         let resp: QueryResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.results.len(), 1);
+        assert_eq!(resp.rows.len(), 1);
 
-        let sr = query_result_to_search_result(resp.results.into_iter().next().unwrap()).unwrap();
+        let row = resp.rows.into_iter().next().unwrap();
+        let dist = row.get("$dist").unwrap().as_f64().unwrap() as f32;
+        let score = 1.0 - dist;
+        let sr = row_to_search_result(row, score).unwrap();
         assert_eq!(sr.id, "doc-1");
-        assert_eq!(sr.score, 0.87);
+        assert!((sr.score - 0.87).abs() < 0.01);
         assert_eq!(sr.file_path, "src/main.rs");
         assert_eq!(sr.chunk_kind, ChunkKind::File);
         assert_eq!(sr.language.as_deref(), Some("rust"));
@@ -636,77 +744,33 @@ mod tests {
     #[test]
     fn parse_symbol_query_result() {
         let json = r#"{
+            "$dist": 0.09,
             "id": "sym-1",
-            "dist": 0.91,
-            "attributes": {
-                "file_path": "src/lib.rs",
-                "chunk_kind": "symbol",
-                "summary": "Processes things",
-                "symbol_name": "process",
-                "symbol_kind": "function",
-                "start_line": 10,
-                "end_line": 25
-            }
+            "file_path": "src/lib.rs",
+            "chunk_kind": "symbol",
+            "summary": "Processes things",
+            "symbol_name": "process",
+            "symbol_kind": "function",
+            "start_line": 10,
+            "end_line": 25
         }"#;
-        let qr: QueryResult = serde_json::from_str(json).unwrap();
-        let sr = query_result_to_search_result(qr).unwrap();
+        let row: HashMap<String, serde_json::Value> = serde_json::from_str(json).unwrap();
+        let dist = row.get("$dist").unwrap().as_f64().unwrap() as f32;
+        let sr = row_to_search_result(row, 1.0 - dist).unwrap();
         assert_eq!(sr.chunk_kind, ChunkKind::Symbol);
         assert_eq!(sr.symbol_name.as_deref(), Some("process"));
         assert_eq!(sr.start_line, Some(10));
-    }
-
-    // ── Query request serialization ───────────────────────────────────
-
-    #[test]
-    fn query_request_with_filters() {
-        let req = QueryRequest {
-            vector: vec![0.1, 0.2],
-            top_k: 5,
-            filters: Some(serde_json::json!({
-                "file_path": ["StartsWith", "src/finance/"],
-                "chunk_kind": ["Eq", "file"]
-            })),
-            include_attributes: true,
-        };
-        let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["top_k"], 5);
-        assert!(json["filters"]["file_path"].is_array());
+        assert!((sr.score - 0.91).abs() < 0.01);
     }
 
     #[test]
-    fn query_request_without_filters() {
-        let req = QueryRequest {
-            vector: vec![0.1],
-            top_k: 10,
-            filters: None,
-            include_attributes: true,
-        };
-        let json = serde_json::to_value(&req).unwrap();
-        assert!(json.get("filters").is_none());
-    }
-
-    // ── Delete request serialization ──────────────────────────────────
-
-    #[test]
-    fn delete_by_ids_request() {
-        let req = DeleteRequest {
-            ids: vec!["a".into(), "b".into()],
-            filters: None,
-        };
-        let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["ids"].as_array().unwrap().len(), 2);
-        assert!(json.get("filters").is_none());
-    }
-
-    #[test]
-    fn delete_by_filter_request() {
-        let req = DeleteRequest {
-            ids: vec![],
-            filters: Some(serde_json::json!({"file_path": ["Eq", "src/main.rs"]})),
-        };
-        let json = serde_json::to_value(&req).unwrap();
-        assert!(json.get("ids").is_none());
-        assert!(json["filters"]["file_path"].is_array());
+    fn cosine_distance_to_similarity_conversion() {
+        // dist=0 → score=1.0 (perfect match)
+        assert!((1.0f32 - 0.0 - 1.0).abs() < f32::EPSILON);
+        // dist=1 → score=0.0 (orthogonal)
+        assert!((1.0f32 - 1.0 - 0.0).abs() < f32::EPSILON);
+        // dist=2 → score=-1.0 (opposite)
+        assert!((1.0f32 - 2.0 - (-1.0)).abs() < f32::EPSILON);
     }
 
     // ── Factory ───────────────────────────────────────────────────────
@@ -717,7 +781,7 @@ mod tests {
             provider: "turbopuffer".into(),
             api_key: "key".into(),
         };
-        assert!(build_store(&config).is_ok());
+        assert!(build_store(&config, 1024).is_ok());
     }
 
     #[test]
@@ -726,7 +790,7 @@ mod tests {
             provider: "turbopuffer".into(),
             api_key: String::new(),
         };
-        assert!(build_store(&config).is_err());
+        assert!(build_store(&config, 1024).is_err());
     }
 
     #[test]
@@ -735,6 +799,313 @@ mod tests {
             provider: "qdrant".into(),
             api_key: "key".into(),
         };
-        assert!(build_store(&config).is_err());
+        assert!(build_store(&config, 1024).is_err());
+    }
+
+    // ── Search filter construction ───────────────────────────────────
+
+    #[test]
+    fn filters_always_exclude_meta_vector() {
+        let opts = SearchOptions::default();
+        let filters = build_search_filters(&opts).unwrap();
+        assert_eq!(filters[0], "id");
+        assert_eq!(filters[1], "NotEq");
+        assert_eq!(filters[2], META_VECTOR_ID);
+    }
+
+    #[test]
+    fn filters_no_options_produces_single_filter() {
+        let opts = SearchOptions::default();
+        let filters = build_search_filters(&opts).unwrap();
+        // Single filter = bare array, not wrapped in And
+        assert_eq!(filters[0], "id");
+        assert!(filters.get(0).unwrap().is_string());
+    }
+
+    #[test]
+    fn filters_path_prefix_uses_glob() {
+        let opts = SearchOptions {
+            path_prefix: Some("src/finance/".into()),
+            ..Default::default()
+        };
+        let filters = build_search_filters(&opts).unwrap();
+        assert_eq!(filters[0], "And");
+        let inner = filters[1].as_array().unwrap();
+        assert_eq!(inner.len(), 2);
+        // Second condition is the Glob filter
+        assert_eq!(inner[1][0], "file_path");
+        assert_eq!(inner[1][1], "Glob");
+        assert_eq!(inner[1][2], "src/finance/*");
+    }
+
+    #[test]
+    fn filters_chunk_kind_adds_eq() {
+        let opts = SearchOptions {
+            chunk_kind: Some(ChunkKind::Symbol),
+            ..Default::default()
+        };
+        let filters = build_search_filters(&opts).unwrap();
+        assert_eq!(filters[0], "And");
+        let inner = filters[1].as_array().unwrap();
+        assert_eq!(inner[1][0], "chunk_kind");
+        assert_eq!(inner[1][1], "Eq");
+        assert_eq!(inner[1][2], "symbol");
+    }
+
+    #[test]
+    fn filters_language_adds_eq() {
+        let opts = SearchOptions {
+            language: Some("rust".into()),
+            ..Default::default()
+        };
+        let filters = build_search_filters(&opts).unwrap();
+        assert_eq!(filters[0], "And");
+        let inner = filters[1].as_array().unwrap();
+        assert_eq!(inner[1][0], "language");
+        assert_eq!(inner[1][1], "Eq");
+        assert_eq!(inner[1][2], "rust");
+    }
+
+    #[test]
+    fn filters_all_options_produces_four_conditions() {
+        let opts = SearchOptions {
+            path_prefix: Some("src/".into()),
+            chunk_kind: Some(ChunkKind::File),
+            language: Some("python".into()),
+            ..Default::default()
+        };
+        let filters = build_search_filters(&opts).unwrap();
+        assert_eq!(filters[0], "And");
+        let inner = filters[1].as_array().unwrap();
+        assert_eq!(inner.len(), 4);
+        assert_eq!(inner[0][0], "id"); // meta exclusion
+        assert_eq!(inner[1][0], "file_path"); // path prefix
+        assert_eq!(inner[2][0], "chunk_kind"); // chunk kind
+        assert_eq!(inner[3][0], "language"); // language
+    }
+
+    // ── Score conversion + min_score filtering ───────────────────────
+
+    #[test]
+    fn dist_to_score_perfect_match() {
+        assert!((dist_to_score(0.0) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dist_to_score_orthogonal() {
+        assert!((dist_to_score(1.0) - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dist_to_score_opposite() {
+        assert!((dist_to_score(2.0) - (-1.0)).abs() < f32::EPSILON);
+    }
+
+    fn make_row(id: &str, dist: f64) -> HashMap<String, serde_json::Value> {
+        let mut row = HashMap::new();
+        row.insert("id".into(), serde_json::json!(id));
+        row.insert("$dist".into(), serde_json::json!(dist));
+        row.insert("file_path".into(), serde_json::json!("src/main.rs"));
+        row.insert("chunk_kind".into(), serde_json::json!("file"));
+        row.insert("summary".into(), serde_json::json!("test"));
+        row
+    }
+
+    #[test]
+    fn score_filter_passes_all_when_no_min() {
+        let rows = vec![make_row("a", 0.1), make_row("b", 1.5), make_row("c", 1.99)];
+        let results = score_and_filter_rows(rows, None).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn score_filter_excludes_below_threshold() {
+        let rows = vec![
+            make_row("good", 0.1), // score = 0.9
+            make_row("ok", 0.5),   // score = 0.5
+            make_row("bad", 1.5),  // score = -0.5
+        ];
+        let results = score_and_filter_rows(rows, Some(0.5)).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "good");
+        assert_eq!(results[1].id, "ok");
+    }
+
+    #[test]
+    fn score_filter_boundary_includes_exact_match() {
+        let rows = vec![make_row("exact", 0.2)]; // score = 0.8
+        let results = score_and_filter_rows(rows, Some(0.8)).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn score_filter_empty_rows_returns_empty() {
+        let results = score_and_filter_rows(vec![], Some(0.5)).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn missing_dist_defaults_to_worst_score() {
+        let mut row = HashMap::new();
+        row.insert("id".into(), serde_json::json!("no-dist"));
+        row.insert("file_path".into(), serde_json::json!("src/main.rs"));
+        row.insert("chunk_kind".into(), serde_json::json!("file"));
+        row.insert("summary".into(), serde_json::json!("test"));
+        // No $dist field — should default to dist=2.0, score=-1.0
+        let results = score_and_filter_rows(vec![row], None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!((results[0].score - (-1.0)).abs() < 0.01);
+    }
+
+    // ── row_to_search_result edge cases ──────────────────────────────
+
+    #[test]
+    fn search_result_missing_optional_fields() {
+        let mut row = HashMap::new();
+        row.insert("id".into(), serde_json::json!("minimal"));
+        row.insert("file_path".into(), serde_json::json!("src/lib.rs"));
+        row.insert("chunk_kind".into(), serde_json::json!("file"));
+        row.insert("summary".into(), serde_json::json!("a file"));
+        let sr = row_to_search_result(row, 0.9).unwrap();
+        assert_eq!(sr.id, "minimal");
+        assert_eq!(sr.file_path, "src/lib.rs");
+        assert!(sr.symbol_name.is_none());
+        assert!(sr.symbol_kind.is_none());
+        assert!(sr.start_line.is_none());
+        assert!(sr.end_line.is_none());
+        assert!(sr.language.is_none());
+    }
+
+    #[test]
+    fn search_result_unknown_chunk_kind_defaults_to_file() {
+        let mut row = HashMap::new();
+        row.insert("id".into(), serde_json::json!("x"));
+        row.insert("file_path".into(), serde_json::json!("a.rs"));
+        row.insert("chunk_kind".into(), serde_json::json!("unknown_kind"));
+        row.insert("summary".into(), serde_json::json!("test"));
+        let sr = row_to_search_result(row, 0.5).unwrap();
+        assert_eq!(sr.chunk_kind, ChunkKind::File);
+    }
+
+    #[test]
+    fn search_result_missing_chunk_kind_defaults_to_file() {
+        let mut row = HashMap::new();
+        row.insert("id".into(), serde_json::json!("x"));
+        row.insert("file_path".into(), serde_json::json!("a.rs"));
+        row.insert("summary".into(), serde_json::json!("test"));
+        let sr = row_to_search_result(row, 0.5).unwrap();
+        assert_eq!(sr.chunk_kind, ChunkKind::File);
+    }
+
+    #[test]
+    fn search_result_missing_id_defaults_to_empty() {
+        let mut row = HashMap::new();
+        row.insert("file_path".into(), serde_json::json!("a.rs"));
+        row.insert("summary".into(), serde_json::json!("test"));
+        let sr = row_to_search_result(row, 0.5).unwrap();
+        assert_eq!(sr.id, "");
+    }
+
+    // ── row_to_metadata edge cases ───────────────────────────────────
+
+    #[test]
+    fn metadata_filters_reserved_keys() {
+        let mut row = HashMap::new();
+        row.insert("id".into(), serde_json::json!(META_VECTOR_ID));
+        row.insert("vector".into(), serde_json::json!([0.0]));
+        row.insert("$dist".into(), serde_json::json!(0.0));
+        row.insert("__is_meta__".into(), serde_json::json!(true));
+        row.insert("hwm_sha".into(), serde_json::json!("abc"));
+        row.insert("embedder".into(), serde_json::json!("voyage/v3"));
+        row.insert("custom_key".into(), serde_json::json!("custom_val"));
+
+        let meta = row_to_metadata(&row).unwrap();
+        assert_eq!(meta.hwm_sha.as_deref(), Some("abc"));
+        assert_eq!(meta.embedder.as_deref(), Some("voyage/v3"));
+        assert_eq!(meta.extra.len(), 1);
+        assert_eq!(meta.extra["custom_key"], "custom_val");
+    }
+
+    #[test]
+    fn metadata_extra_skips_non_string_values() {
+        let mut row = HashMap::new();
+        row.insert("numeric_field".into(), serde_json::json!(42));
+        row.insert("string_field".into(), serde_json::json!("kept"));
+
+        let meta = row_to_metadata(&row).unwrap();
+        assert!(!meta.extra.contains_key("numeric_field"));
+        assert_eq!(meta.extra["string_field"], "kept");
+    }
+
+    #[test]
+    fn metadata_round_trip_with_extra_fields() {
+        let mut extra = HashMap::new();
+        extra.insert("version".into(), "2".into());
+        extra.insert("created_by".into(), "megagrep".into());
+        let meta = NamespaceMetadata {
+            hwm_sha: Some("def456".into()),
+            embedder: Some("openai/text-embedding-3-large".into()),
+            extra,
+        };
+        let row = metadata_to_row(&meta, 2);
+        let back = row_to_metadata(&row).unwrap();
+        assert_eq!(back.hwm_sha.as_deref(), Some("def456"));
+        assert_eq!(
+            back.embedder.as_deref(),
+            Some("openai/text-embedding-3-large")
+        );
+        assert_eq!(back.extra.len(), 2);
+        assert_eq!(back.extra["version"], "2");
+        assert_eq!(back.extra["created_by"], "megagrep");
+    }
+
+    // ── doc_to_row completeness ──────────────────────────────────────
+
+    #[test]
+    fn doc_to_row_all_fields_populated() {
+        let doc = VectorDocument {
+            id: "full-doc".into(),
+            vector: vec![0.1, 0.2, 0.3],
+            summary: "Full document".into(),
+            file_path: "src/deep/nested/file.rs".into(),
+            chunk_kind: ChunkKind::Symbol,
+            symbol_name: Some("my_function".into()),
+            symbol_kind: Some("method".into()),
+            start_line: Some(100),
+            end_line: Some(200),
+            language: Some("rust".into()),
+        };
+        let row = doc_to_row(&doc);
+        assert_eq!(row.len(), 10); // id, vector, summary, file_path, chunk_kind + 5 optional
+        assert_eq!(row["id"], "full-doc");
+        assert_eq!(row["chunk_kind"], "symbol");
+        assert_eq!(row["symbol_name"], "my_function");
+        assert_eq!(row["symbol_kind"], "method");
+        assert_eq!(row["start_line"], 100);
+        assert_eq!(row["end_line"], 200);
+        assert_eq!(row["language"], "rust");
+    }
+
+    #[test]
+    fn doc_to_row_minimal_fields() {
+        let doc = VectorDocument {
+            id: "min".into(),
+            vector: vec![0.5],
+            summary: "Minimal".into(),
+            file_path: "file.txt".into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: None,
+        };
+        let row = doc_to_row(&doc);
+        assert_eq!(row.len(), 5); // id, vector, summary, file_path, chunk_kind
+        assert!(!row.contains_key("symbol_name"));
+        assert!(!row.contains_key("symbol_kind"));
+        assert!(!row.contains_key("start_line"));
+        assert!(!row.contains_key("end_line"));
+        assert!(!row.contains_key("language"));
     }
 }
