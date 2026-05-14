@@ -31,27 +31,27 @@ impl IndexerConfig {
         let f = file.as_ref().and_then(|f| f.indexer.as_ref());
 
         let namespace: Resolved<String> = env_or_resolved(
-            "MEGAGREP_NAMESPACE",
+            "WDPKR_NAMESPACE",
             file_or_resolved(f.and_then(|i| i.namespace.clone()), String::new()),
         );
         let default_branch: Resolved<String> = env_or_resolved(
-            "MEGAGREP_DEFAULT_BRANCH",
+            "WDPKR_DEFAULT_BRANCH",
             file_or_resolved(f.and_then(|i| i.default_branch.clone()), "main".into()),
         );
         let git_remote: Resolved<String> = env_or_resolved(
-            "MEGAGREP_GIT_REMOTE",
+            "WDPKR_GIT_REMOTE",
             file_or_resolved(f.and_then(|i| i.git_remote.clone()), "origin".into()),
         );
         let concurrency: Resolved<usize> = env_or_resolved(
-            "MEGAGREP_CONCURRENCY",
+            "WDPKR_CONCURRENCY",
             file_or_resolved(f.and_then(|i| i.concurrency), 8),
         );
         let max_cost: Resolved<f64> = env_or_resolved(
-            "MEGAGREP_MAX_COST",
+            "WDPKR_MAX_COST",
             file_or_resolved(f.and_then(|i| i.max_cost), 50.0),
         );
         let hwm_success_threshold: Resolved<f64> = env_or_resolved(
-            "MEGAGREP_HWM_SUCCESS_THRESHOLD",
+            "WDPKR_HWM_SUCCESS_THRESHOLD",
             file_or_resolved(f.and_then(|i| i.hwm_success_threshold), 0.95),
         );
 
@@ -85,11 +85,11 @@ mod tests {
 
     fn clear_env() {
         remove_envs(&[
-            "MEGAGREP_NAMESPACE",
-            "MEGAGREP_DEFAULT_BRANCH",
-            "MEGAGREP_CONCURRENCY",
-            "MEGAGREP_MAX_COST",
-            "MEGAGREP_HWM_SUCCESS_THRESHOLD",
+            "WDPKR_NAMESPACE",
+            "WDPKR_DEFAULT_BRANCH",
+            "WDPKR_CONCURRENCY",
+            "WDPKR_MAX_COST",
+            "WDPKR_HWM_SUCCESS_THRESHOLD",
         ]);
     }
 
@@ -109,9 +109,9 @@ mod tests {
     #[serial]
     fn env_overrides() {
         clear_env();
-        set_env("MEGAGREP_CONCURRENCY", "16");
-        set_env("MEGAGREP_MAX_COST", "100");
-        set_env("MEGAGREP_NAMESPACE", "my-repo");
+        set_env("WDPKR_CONCURRENCY", "16");
+        set_env("WDPKR_MAX_COST", "100");
+        set_env("WDPKR_NAMESPACE", "my-repo");
         let cfg = IndexerConfig::from_env(&None);
         assert_eq!(cfg.concurrency, 16);
         assert_eq!(cfg.max_cost, 100.0);
@@ -123,7 +123,7 @@ mod tests {
     #[serial]
     fn parse_failure_uses_default() {
         clear_env();
-        set_env("MEGAGREP_CONCURRENCY", "not-a-number");
+        set_env("WDPKR_CONCURRENCY", "not-a-number");
         let cfg = IndexerConfig::from_env(&None);
         // Per env_or contract: silent fallback on parse failure.
         assert_eq!(cfg.concurrency, 8);
@@ -134,7 +134,7 @@ mod tests {
     #[serial]
     fn float_threshold_parses() {
         clear_env();
-        set_env("MEGAGREP_HWM_SUCCESS_THRESHOLD", "0.8");
+        set_env("WDPKR_HWM_SUCCESS_THRESHOLD", "0.8");
         let cfg = IndexerConfig::from_env(&None);
         assert!((cfg.hwm_success_threshold - 0.8).abs() < f64::EPSILON);
         clear_env();
@@ -167,7 +167,7 @@ mod tests {
     #[serial]
     fn env_beats_file() {
         clear_env();
-        set_env("MEGAGREP_CONCURRENCY", "4");
+        set_env("WDPKR_CONCURRENCY", "4");
         let file = FileConfig {
             indexer: Some(FileIndexerConfig {
                 concurrency: Some(24),
@@ -216,11 +216,11 @@ mod tests {
     #[serial]
     fn resolve_marks_env_when_env_set() {
         clear_env();
-        set_env("MEGAGREP_CONCURRENCY", "16");
-        set_env("MEGAGREP_MAX_COST", "200");
+        set_env("WDPKR_CONCURRENCY", "16");
+        set_env("WDPKR_MAX_COST", "200");
         let (_, sources) = IndexerConfig::resolve(&None);
-        assert_eq!(sources.concurrency, Source::Env("MEGAGREP_CONCURRENCY"));
-        assert_eq!(sources.max_cost, Source::Env("MEGAGREP_MAX_COST"));
+        assert_eq!(sources.concurrency, Source::Env("WDPKR_CONCURRENCY"));
+        assert_eq!(sources.max_cost, Source::Env("WDPKR_MAX_COST"));
         clear_env();
     }
 }

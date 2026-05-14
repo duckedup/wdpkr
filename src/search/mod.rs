@@ -78,7 +78,7 @@ impl SearchRun {
         // 1. Verify namespace exists
         if !self.store.namespace_exists(&self.namespace).await? {
             bail!(
-                "index not found for namespace '{}'; run `megagrep index` first",
+                "index not found for namespace '{}'; run `wdpkr index` first",
                 self.namespace.as_str()
             );
         }
@@ -91,7 +91,7 @@ impl SearchRun {
                 bail!(
                     "embedder mismatch: index was built with {stored_embedder}, \
                      but search is configured for {current}; \
-                     run `megagrep index --full` to reindex or change your embedder config"
+                     run `wdpkr index --full` to reindex or change your embedder config"
                 );
             }
         }

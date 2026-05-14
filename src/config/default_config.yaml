@@ -1,4 +1,4 @@
-# ~/.config/megagrep/config.yaml — for local dev use.
+# ~/.config/wdpkr/config.yaml — for local dev use.
 # Every field is optional. Env vars override all values here.
 # Credentials (API keys) should be set via env vars, not this file.
 

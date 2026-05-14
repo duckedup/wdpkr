@@ -11,7 +11,7 @@
 //!   reduce boilerplate in tests that need realistic-looking data.
 //! - **Mock VectorStore** (`mock_store.rs`): in-memory, deterministic,
 //!   real cosine similarity for faithful search ranking.
-//! - **Mock Embedder** (`mock_embed.rs`, issue megagrep-zog): deterministic
+//! - **Mock Embedder** (`mock_embed.rs`, issue wdpkr-zog): deterministic
 //!   vectors for reproducible search tests.
 
 pub mod mock_embed;

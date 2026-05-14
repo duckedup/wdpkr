@@ -1,13 +1,13 @@
-# megagrep
+# wdpkr
 
-Conceptual codebase search for AI coding agents. Maintains a vector-search index of LLM-generated summaries and exposes a single `megagrep search` command that returns tiered, file+symbol results as JSON.
+Conceptual codebase search for AI coding agents. Maintains a vector-search index of LLM-generated summaries and exposes a single `wdpkr search` command that returns tiered, file+symbol results as JSON.
 
-**megagrep is not a replacement for grep/ripgrep.** It's the conceptual layer on top — "where does the commission system live?" rather than "find the string `CommissionService`."
+**wdpkr is not a replacement for grep/ripgrep.** It's the conceptual layer on top — "where does the commission system live?" rather than "find the string `CommissionService`."
 
 ## How it works
 
 ```
-megagrep search "release commission payments to individual payees"
+wdpkr search "release commission payments to individual payees"
 ```
 
 ```json
@@ -34,7 +34,7 @@ megagrep search "release commission payments to individual payees"
 }
 ```
 
-The agent reads the actual files for ground truth. megagrep's job is to **point and describe**, not to ship source into the context window.
+The agent reads the actual files for ground truth. wdpkr's job is to **point and describe**, not to ship source into the context window.
 
 ## Quick start
 
@@ -42,8 +42,8 @@ The agent reads the actual files for ground truth. megagrep's job is to **point 
 # Install
 cargo install --path .
 
-# Initialize a repo (writes CLAUDE.md section, .megagrepignore, CI workflow)
-megagrep init
+# Initialize a repo (writes CLAUDE.md section, .wdpkrignore, CI workflow)
+wdpkr init
 
 # Set up credentials
 export ANTHROPIC_API_KEY=...   # for summarization (Claude Haiku)
@@ -51,25 +51,25 @@ export VOYAGE_API_KEY=...      # for embedding (voyage-code-3)
 export TURBOPUFFER_API_KEY=... # for vector storage
 
 # Index the codebase
-megagrep index --full
+wdpkr index --full
 
 # Search
-megagrep search "release commission payments"
-megagrep search "how is rate limiting implemented" --pretty
-megagrep search "auth flow" --scope src/auth/ -k 10
+wdpkr search "release commission payments"
+wdpkr search "how is rate limiting implemented" --pretty
+wdpkr search "auth flow" --scope src/auth/ -k 10
 ```
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `megagrep index [--full]` | Index the codebase (full or incremental from HWM) |
-| `megagrep search "<query>"` | Semantic search, returns tiered JSON |
-| `megagrep config list` | Show all config values and their sources |
-| `megagrep config get <key>` | Get a single config value |
-| `megagrep config set <key> <val>` | Set a config value in the config file |
-| `megagrep config init` | Write default config file |
-| `megagrep init` | Initialize megagrep for a repo (CLAUDE.md, .megagrepignore, CI workflow) |
+| `wdpkr index [--full]` | Index the codebase (full or incremental from HWM) |
+| `wdpkr search "<query>"` | Semantic search, returns tiered JSON |
+| `wdpkr config list` | Show all config values and their sources |
+| `wdpkr config get <key>` | Get a single config value |
+| `wdpkr config set <key> <val>` | Set a config value in the config file |
+| `wdpkr config init` | Write default config file |
+| `wdpkr init` | Initialize wdpkr for a repo (CLAUDE.md, .wdpkrignore, CI workflow) |
 
 ## Architecture
 
@@ -115,15 +115,15 @@ megagrep search "auth flow" --scope src/auth/ -k 10
 | Embedder | Voyage `voyage-code-3` / Ollama / OpenAI (trait-swappable) |
 | Summarizer | Anthropic Claude Haiku (trait-swappable) |
 | Chunker | tree-sitter (8 languages) |
-| Config | `~/.config/megagrep/config.yaml` + env vars + CLI flags |
+| Config | `~/.config/wdpkr/config.yaml` + env vars + CLI flags |
 
 ## Configuration
 
 Four-layer resolution: `defaults → config file → env vars → CLI flags`.
 
 ```bash
-megagrep config init    # Write default config
-megagrep config list    # Show values + where each came from
+wdpkr config init    # Write default config
+wdpkr config list    # Show values + where each came from
 ```
 
 Key env vars:
@@ -131,8 +131,8 @@ Key env vars:
 TURBOPUFFER_API_KEY     # vector storage (always required)
 VOYAGE_API_KEY          # embedding (default provider)
 ANTHROPIC_API_KEY       # summarization (always required)
-MEGAGREP_NAMESPACE      # override auto-derived namespace
-MEGAGREP_EMBED_PROVIDER # voyage | ollama | openai
+WDPKR_NAMESPACE      # override auto-derived namespace
+WDPKR_EMBED_PROVIDER # voyage | ollama | openai
 ```
 
 ## Roadmap
@@ -147,7 +147,7 @@ MEGAGREP_EMBED_PROVIDER # voyage | ollama | openai
 - [x] **Real embedder adapters** — Voyage, Ollama, OpenAI with bounded retry
 - [x] **VectorStore adapter** — Turbopuffer with attribute-filtered search
 - [x] **Indexer pipeline** — git diff, repo walker, chunk → summarize → embed → upsert, HWM tracking
-- [x] **Init command** — CLAUDE.md/AGENTS.md section, .megagrepignore, CI workflow generation
+- [x] **Init command** — CLAUDE.md/AGENTS.md section, .wdpkrignore, CI workflow generation
 - [x] **Integration tests** — full index → search round-trip against temp git repos with mocks
 - [x] **CI** — Forgejo workflow (fmt, clippy, test, release build)
 

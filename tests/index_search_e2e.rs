@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use megagrep::chunk::tree_sitter::TreeSitterChunker;
-use megagrep::indexer::IndexRun;
-use megagrep::search::{SearchParams, SearchRun};
-use megagrep::store::{Namespace, VectorStore};
-use megagrep::testing::mock_embed::MockEmbedder;
-use megagrep::testing::mock_store::MockVectorStore;
-use megagrep::testing::mock_summarize::MockSummarizer;
+use wdpkr::chunk::tree_sitter::TreeSitterChunker;
+use wdpkr::indexer::IndexRun;
+use wdpkr::search::{SearchParams, SearchRun};
+use wdpkr::store::{Namespace, VectorStore};
+use wdpkr::testing::mock_embed::MockEmbedder;
+use wdpkr::testing::mock_store::MockVectorStore;
+use wdpkr::testing::mock_summarize::MockSummarizer;
 
 // ── Fixture helpers ───────────────────────────────────────────────────────
 
@@ -25,10 +25,8 @@ fn unique_tempdir(label: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "megagrep-e2e-{label}-{}-{nanos}",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("wdpkr-e2e-{label}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     path
 }
@@ -38,7 +36,7 @@ fn create_fixture_repo(label: &str) -> PathBuf {
     let dir = unique_tempdir(label);
 
     git(&dir, &["init"]);
-    git(&dir, &["config", "user.email", "test@megagrep.dev"]);
+    git(&dir, &["config", "user.email", "test@wdpkr.dev"]);
     git(&dir, &["config", "user.name", "Test"]);
 
     // Rust file with two functions
@@ -468,7 +466,7 @@ async fn json_output_is_valid_after_full_pipeline() {
         .await
         .unwrap();
 
-    let json_str = megagrep::search::output::render_json(&result).unwrap();
+    let json_str = wdpkr::search::output::render_json(&result).unwrap();
     let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
     assert!(json["query"].is_string());
@@ -499,21 +497,21 @@ impl VectorStore for ArcStore {
     async fn get_metadata(
         &self,
         ns: &Namespace,
-    ) -> anyhow::Result<megagrep::store::NamespaceMetadata> {
+    ) -> anyhow::Result<wdpkr::store::NamespaceMetadata> {
         self.0.get_metadata(ns).await
     }
     async fn set_metadata(
         &self,
         ns: &Namespace,
-        meta: &megagrep::store::NamespaceMetadata,
+        meta: &wdpkr::store::NamespaceMetadata,
     ) -> anyhow::Result<()> {
         self.0.set_metadata(ns, meta).await
     }
     async fn upsert(
         &self,
         ns: &Namespace,
-        docs: &[megagrep::store::VectorDocument],
-    ) -> anyhow::Result<megagrep::store::UpsertStats> {
+        docs: &[wdpkr::store::VectorDocument],
+    ) -> anyhow::Result<wdpkr::store::UpsertStats> {
         self.0.upsert(ns, docs).await
     }
     async fn delete_by_ids(&self, ns: &Namespace, ids: &[&str]) -> anyhow::Result<()> {
@@ -526,8 +524,8 @@ impl VectorStore for ArcStore {
         &self,
         ns: &Namespace,
         query_vector: &[f32],
-        opts: &megagrep::store::SearchOptions,
-    ) -> anyhow::Result<Vec<megagrep::store::SearchResult>> {
+        opts: &wdpkr::store::SearchOptions,
+    ) -> anyhow::Result<Vec<wdpkr::store::SearchResult>> {
         self.0.search(ns, query_vector, opts).await
     }
 }

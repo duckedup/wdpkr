@@ -11,7 +11,7 @@ pub struct ConfigArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommand {
-    /// Write default config file to ~/.config/megagrep/config.yaml
+    /// Write default config file to ~/.config/wdpkr/config.yaml
     Init,
     /// Get a config value by dotted key (e.g. "embedder.model")
     Get {
@@ -48,12 +48,12 @@ async fn run_init() -> Result<()> {
     let path = FileConfig::path()?;
     if path.exists() {
         bail!(
-            "config file already exists at {}; use `megagrep config edit` to modify it",
+            "config file already exists at {}; use `wdpkr config edit` to modify it",
             path.display()
         );
     }
 
-    println!("megagrep config init — setting up ~/.config/megagrep/config.yaml\n");
+    println!("wdpkr config init — setting up ~/.config/wdpkr/config.yaml\n");
 
     // ── Vector store ──
     let store_provider = prompt_choice("Vector store provider", &["turbopuffer"], "turbopuffer")?;
@@ -213,7 +213,7 @@ async fn run_edit() -> Result<()> {
     let path = FileConfig::path()?;
     if !path.exists() {
         bail!(
-            "no config file at {}; run `megagrep config init` first",
+            "no config file at {}; run `wdpkr config init` first",
             path.display()
         );
     }
@@ -242,17 +242,17 @@ mod tests {
 
     fn clear_and_setup(label: &str) -> PathBuf {
         remove_envs(&[
-            "MEGAGREP_STORE_PROVIDER",
-            "MEGAGREP_EMBED_PROVIDER",
-            "MEGAGREP_EMBED_MODEL",
-            "MEGAGREP_EMBED_BATCH_SIZE",
-            "MEGAGREP_SUMMARIZER_PROVIDER",
-            "MEGAGREP_SUMMARIZER_MODEL",
-            "MEGAGREP_NAMESPACE",
-            "MEGAGREP_DEFAULT_BRANCH",
-            "MEGAGREP_CONCURRENCY",
-            "MEGAGREP_MAX_COST",
-            "MEGAGREP_HWM_SUCCESS_THRESHOLD",
+            "WDPKR_STORE_PROVIDER",
+            "WDPKR_EMBED_PROVIDER",
+            "WDPKR_EMBED_MODEL",
+            "WDPKR_EMBED_BATCH_SIZE",
+            "WDPKR_SUMMARIZER_PROVIDER",
+            "WDPKR_SUMMARIZER_MODEL",
+            "WDPKR_NAMESPACE",
+            "WDPKR_DEFAULT_BRANCH",
+            "WDPKR_CONCURRENCY",
+            "WDPKR_MAX_COST",
+            "WDPKR_HWM_SUCCESS_THRESHOLD",
             "TURBOPUFFER_API_KEY",
             "VOYAGE_API_KEY",
             "OPENAI_API_KEY",
@@ -261,7 +261,7 @@ mod tests {
             "XDG_CONFIG_HOME",
         ]);
         let tmp = std::env::temp_dir().join(format!(
-            "megagrep-cli-{label}-{}-{}",
+            "wdpkr-cli-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

@@ -1,5 +1,5 @@
 use clap::Parser;
-use megagrep::cli::{self, Cli, Command};
+use wdpkr::cli::{self, Cli, Command};
 
 fn main() {
     let cli = Cli::parse();

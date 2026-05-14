@@ -1,4 +1,4 @@
-# .megagrepignore — files to exclude from megagrep indexing.
+# .wdpkrignore — files to exclude from wdpkr indexing.
 # These are committed files that .gitignore doesn't cover but that
 # add noise to semantic search (lockfiles, generated code, snapshots).
 # Syntax is identical to .gitignore.

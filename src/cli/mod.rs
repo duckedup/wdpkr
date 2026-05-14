@@ -21,7 +21,7 @@ pub mod exit {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "megagrep",
+    name = "wdpkr",
     about = "Conceptual codebase search via vector retrieval over LLM-generated summaries",
     version
 )]
@@ -38,7 +38,7 @@ pub enum Command {
     Search(SearchArgs),
     /// Index the codebase
     Index(IndexArgs),
-    /// Initialize megagrep for a repository
+    /// Initialize wdpkr for a repository
     Init(InitArgs),
 }
 
@@ -59,24 +59,24 @@ mod tests {
 
     #[test]
     fn no_subcommand_errors() {
-        assert!(Cli::try_parse_from(["megagrep"]).is_err());
+        assert!(Cli::try_parse_from(["wdpkr"]).is_err());
     }
 
     #[test]
     fn unknown_subcommand_errors() {
-        assert!(Cli::try_parse_from(["megagrep", "bogus"]).is_err());
+        assert!(Cli::try_parse_from(["wdpkr", "bogus"]).is_err());
     }
 
     // ── search ────────────────────────────────────────────────────────
 
     #[test]
     fn search_requires_query() {
-        assert!(Cli::try_parse_from(["megagrep", "search"]).is_err());
+        assert!(Cli::try_parse_from(["wdpkr", "search"]).is_err());
     }
 
     #[test]
     fn search_parses_with_query_and_defaults() {
-        let cli = Cli::try_parse_from(["megagrep", "search", "find commission payments"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "search", "find commission payments"]).unwrap();
         match cli.command {
             Command::Search(args) => {
                 assert_eq!(args.query, "find commission payments");
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn search_parses_all_flags() {
         let cli = Cli::try_parse_from([
-            "megagrep",
+            "wdpkr",
             "search",
             "query",
             "-k",
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn index_parses_with_defaults() {
-        let cli = Cli::try_parse_from(["megagrep", "index"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "index"]).unwrap();
         match cli.command {
             Command::Index(args) => {
                 assert!(!args.full);
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn index_parses_all_flags() {
         let cli = Cli::try_parse_from([
-            "megagrep",
+            "wdpkr",
             "index",
             "--full",
             "--dry-run",
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn config_list_parses() {
-        let cli = Cli::try_parse_from(["megagrep", "config", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "config", "list"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Config(ConfigArgs {
@@ -177,12 +177,12 @@ mod tests {
 
     #[test]
     fn config_get_requires_key() {
-        assert!(Cli::try_parse_from(["megagrep", "config", "get"]).is_err());
+        assert!(Cli::try_parse_from(["wdpkr", "config", "get"]).is_err());
     }
 
     #[test]
     fn config_get_parses_key() {
-        let cli = Cli::try_parse_from(["megagrep", "config", "get", "embedder.model"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "config", "get", "embedder.model"]).unwrap();
         match cli.command {
             Command::Config(ConfigArgs {
                 command: ConfigCommand::Get { key },
@@ -193,20 +193,15 @@ mod tests {
 
     #[test]
     fn config_set_requires_key_and_value() {
-        assert!(Cli::try_parse_from(["megagrep", "config", "set"]).is_err());
-        assert!(Cli::try_parse_from(["megagrep", "config", "set", "key"]).is_err());
+        assert!(Cli::try_parse_from(["wdpkr", "config", "set"]).is_err());
+        assert!(Cli::try_parse_from(["wdpkr", "config", "set", "key"]).is_err());
     }
 
     #[test]
     fn config_set_parses_key_and_value() {
-        let cli = Cli::try_parse_from([
-            "megagrep",
-            "config",
-            "set",
-            "embedder.model",
-            "voyage-3-large",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["wdpkr", "config", "set", "embedder.model", "voyage-3-large"])
+                .unwrap();
         match cli.command {
             Command::Config(ConfigArgs {
                 command: ConfigCommand::Set { key, value },
@@ -220,7 +215,7 @@ mod tests {
 
     #[test]
     fn config_init_parses() {
-        let cli = Cli::try_parse_from(["megagrep", "config", "init"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "config", "init"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Config(ConfigArgs {
@@ -231,7 +226,7 @@ mod tests {
 
     #[test]
     fn config_edit_parses() {
-        let cli = Cli::try_parse_from(["megagrep", "config", "edit"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "config", "edit"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Config(ConfigArgs {
@@ -242,7 +237,7 @@ mod tests {
 
     #[test]
     fn config_path_parses() {
-        let cli = Cli::try_parse_from(["megagrep", "config", "path"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "config", "path"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Config(ConfigArgs {
@@ -255,7 +250,7 @@ mod tests {
 
     #[test]
     fn init_parses() {
-        let cli = Cli::try_parse_from(["megagrep", "init"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "init"]).unwrap();
         assert!(matches!(cli.command, Command::Init(_)));
     }
 }

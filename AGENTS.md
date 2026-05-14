@@ -1,10 +1,10 @@
-# AGENTS.md — Multi-agent coordination for megagrep
+# AGENTS.md — Multi-agent coordination for wdpkr
 
 This file describes how AI agents should interact with this codebase. It supplements `CLAUDE.md` (which covers project-specific conventions) with agent-coordination patterns.
 
 ## Who uses this codebase
 
-megagrep is built BY AI agents (Claude Code) and FOR AI agents (any agent that can shell out). The primary consumer of `megagrep search` output is an AI coding agent that needs to orient itself in an unfamiliar codebase.
+wdpkr is built BY AI agents (Claude Code) and FOR AI agents (any agent that can shell out). The primary consumer of `wdpkr search` output is an AI coding agent that needs to orient itself in an unfamiliar codebase.
 
 ## Non-Interactive Shell Commands
 
@@ -52,20 +52,20 @@ Every PR must pass `just ci` which runs:
 
 ## Search output contract
 
-Agents consuming `megagrep search` output should parse the JSON and use:
+Agents consuming `wdpkr search` output should parse the JSON and use:
 - `results[].path` — file to read
 - `results[].summary` — what the file does (for context, not ground truth)
 - `results[].symbols[].name` — specific function/type to look at
 - `results[].symbols[].lines` — line range to read
 - `indexed_at` — HWM SHA, tells the agent how stale the index is
 
-**Always read the actual file for ground truth.** megagrep points and describes; it does not substitute for reading code.
+**Always read the actual file for ground truth.** wdpkr points and describes; it does not substitute for reading code.
 
 ## Key design constraints
 
 - **Embed summaries, not code** — the vocabulary gap between user stories and code identifiers is closed by LLM-generated summaries, not by raw-code embedding
 - **Single namespace per repo** — no commit-keyed namespaces, no historical search
-- **CLI, not MCP** — any agent that can shell out can use megagrep; auth stays in env vars
+- **CLI, not MCP** — any agent that can shell out can use wdpkr; auth stays in env vars
 - **Pluggable backends** — every external dependency (vector store, embedder, summarizer, chunker) is behind a trait
 
 ## File layout reference

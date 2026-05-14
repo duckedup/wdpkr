@@ -95,8 +95,8 @@ mod tests {
 
     #[test]
     fn derive_namespace_from_ssh_url() {
-        let ns = derive_namespace("ssh://git@codeberg.org/phoenixai/megagrep.git");
-        assert!(ns.starts_with("megagrep-"));
+        let ns = derive_namespace("ssh://git@codeberg.org/phoenixai/wdpkr.git");
+        assert!(ns.starts_with("wdpkr-"));
     }
 
     #[test]

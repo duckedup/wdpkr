@@ -4,11 +4,11 @@
 //! mock setup → SearchRun → SearchReport → JSON/pretty rendering.
 //! Validates the SPEC's JSON contract from an external consumer's perspective.
 
-use megagrep::search::output;
-use megagrep::search::{SearchParams, SearchRun};
-use megagrep::store::{ChunkKind, Namespace, NamespaceMetadata, VectorDocument, VectorStore};
-use megagrep::testing::mock_embed::MockEmbedder;
-use megagrep::testing::mock_store::MockVectorStore;
+use wdpkr::search::output;
+use wdpkr::search::{SearchParams, SearchRun};
+use wdpkr::store::{ChunkKind, Namespace, NamespaceMetadata, VectorDocument, VectorStore};
+use wdpkr::testing::mock_embed::MockEmbedder;
+use wdpkr::testing::mock_store::MockVectorStore;
 
 async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
     let store = MockVectorStore::new();
@@ -17,7 +17,7 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
         .await
         .unwrap();
 
-    megagrep::store::VectorStore::set_metadata(
+    wdpkr::store::VectorStore::set_metadata(
         &store,
         &Namespace::from("integration"),
         &NamespaceMetadata {
@@ -92,7 +92,7 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
         },
     ];
 
-    megagrep::store::VectorStore::upsert(&store, &Namespace::from("integration"), &docs)
+    wdpkr::store::VectorStore::upsert(&store, &Namespace::from("integration"), &docs)
         .await
         .unwrap();
 
@@ -158,9 +158,9 @@ async fn full_pipeline_json_matches_spec_contract() {
 }
 
 #[tokio::test]
-async fn json_is_parseable_without_megagrep_types() {
+async fn json_is_parseable_without_wdpkr_types() {
     // Simulates an agent parsing the JSON with only serde_json — no
-    // megagrep types imported. This catches accidentally non-serializable
+    // wdpkr types imported. This catches accidentally non-serializable
     // fields or struct changes that break the contract.
     let (store, embedder) = seeded_env().await;
     let search = search_run(embedder, store);
@@ -278,7 +278,7 @@ async fn embedder_mismatch_is_caught() {
     let (store, embedder) = seeded_env().await;
 
     // Tamper with the stored embedder identity
-    megagrep::store::VectorStore::set_metadata(
+    wdpkr::store::VectorStore::set_metadata(
         &store,
         &Namespace::from("integration"),
         &NamespaceMetadata {

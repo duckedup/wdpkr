@@ -23,7 +23,7 @@ impl StoreConfig {
         let f = file.as_ref().and_then(|f| f.store.as_ref());
 
         let provider: Resolved<String> = env_or_resolved(
-            "MEGAGREP_STORE_PROVIDER",
+            "WDPKR_STORE_PROVIDER",
             file_or_resolved(f.and_then(|s| s.provider.clone()), "turbopuffer".into()),
         );
         let api_key: Resolved<String> = env_or_resolved(
@@ -52,7 +52,7 @@ mod tests {
     use serial_test::serial;
 
     fn clear_env() {
-        remove_envs(&["MEGAGREP_STORE_PROVIDER", "TURBOPUFFER_API_KEY"]);
+        remove_envs(&["WDPKR_STORE_PROVIDER", "TURBOPUFFER_API_KEY"]);
     }
 
     #[test]
@@ -68,7 +68,7 @@ mod tests {
     #[serial]
     fn env_overrides_provider() {
         clear_env();
-        set_env("MEGAGREP_STORE_PROVIDER", "qdrant");
+        set_env("WDPKR_STORE_PROVIDER", "qdrant");
         let cfg = StoreConfig::from_env(&None);
         assert_eq!(cfg.provider, "qdrant");
         clear_env();
@@ -103,7 +103,7 @@ mod tests {
     #[serial]
     fn env_beats_file() {
         clear_env();
-        set_env("MEGAGREP_STORE_PROVIDER", "qdrant");
+        set_env("WDPKR_STORE_PROVIDER", "qdrant");
         let file = FileConfig {
             store: Some(FileStoreConfig {
                 provider: Some("milvus".into()),
@@ -146,10 +146,10 @@ mod tests {
     #[serial]
     fn resolve_marks_env_when_env_set() {
         clear_env();
-        set_env("MEGAGREP_STORE_PROVIDER", "qdrant");
+        set_env("WDPKR_STORE_PROVIDER", "qdrant");
         set_env("TURBOPUFFER_API_KEY", "key");
         let (_, sources) = StoreConfig::resolve(&None);
-        assert_eq!(sources.provider, Source::Env("MEGAGREP_STORE_PROVIDER"));
+        assert_eq!(sources.provider, Source::Env("WDPKR_STORE_PROVIDER"));
         assert_eq!(sources.api_key, Source::Env("TURBOPUFFER_API_KEY"));
         clear_env();
     }

@@ -3,11 +3,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use clap::Args;
 
-const MEGAGREP_SECTION: &str = include_str!("templates/claude_md.md");
-const MEGAGREPIGNORE: &str = include_str!("templates/megagrepignore");
+const WDPKR_SECTION: &str = include_str!("templates/claude_md.md");
+const WDPKRIGNORE: &str = include_str!("templates/wdpkrignore");
 const CI_WORKFLOW: &str = include_str!("templates/ci_workflow.yml");
 
-const SECTION_MARKER: &str = "### megagrep";
+const SECTION_MARKER: &str = "### wdpkr";
 
 #[derive(Args, Debug)]
 pub struct InitArgs {}
@@ -44,24 +44,24 @@ pub async fn run(_args: InitArgs) -> Result<()> {
 
     if !claude_exists && !agents_exists {
         let choice = prompt_agent_file_choice()?;
-        std::fs::write(choice.as_str(), MEGAGREP_SECTION)
+        std::fs::write(choice.as_str(), WDPKR_SECTION)
             .with_context(|| format!("writing {choice}"))?;
         wrote.push(format!("{choice} (created)"));
     }
 
-    // 2. .megagrepignore
-    match write_if_missing(".megagrepignore", MEGAGREPIGNORE) {
+    // 2. .wdpkrignore
+    match write_if_missing(".wdpkrignore", WDPKRIGNORE) {
         Ok(action) => match action {
             WriteAction::Created(p) => wrote.push(p),
             WriteAction::Skipped(p) => skipped.push(p),
             _ => {}
         },
-        Err(e) => eprintln!("warning: .megagrepignore: {e}"),
+        Err(e) => eprintln!("warning: .wdpkrignore: {e}"),
     }
 
     // 3. CI workflow
     let workflow_dir = ".github/workflows";
-    let workflow_path = format!("{workflow_dir}/megagrep.yml");
+    let workflow_path = format!("{workflow_dir}/wdpkr.yml");
     if let Err(e) = std::fs::create_dir_all(workflow_dir) {
         eprintln!("warning: could not create {workflow_dir}: {e}");
     } else {
@@ -88,7 +88,7 @@ pub async fn run(_args: InitArgs) -> Result<()> {
         }
     }
     if wrote.is_empty() && skipped.is_empty() {
-        println!("Nothing to do — megagrep is already initialized.");
+        println!("Nothing to do — wdpkr is already initialized.");
     }
 
     Ok(())
@@ -109,7 +109,7 @@ fn write_if_missing(path: &str, content: &str) -> Result<WriteAction> {
 }
 
 fn prompt_agent_file_choice() -> Result<String> {
-    eprintln!("No CLAUDE.md or AGENTS.md found. Where should the megagrep agent instructions go?");
+    eprintln!("No CLAUDE.md or AGENTS.md found. Where should the wdpkr agent instructions go?");
     eprintln!("  1) CLAUDE.md");
     eprintln!("  2) AGENTS.md");
     eprint!("Choice [1]: ");
@@ -138,7 +138,7 @@ fn append_section(path: &str) -> Result<WriteAction> {
     if !content.ends_with('\n') {
         content.push('\n');
     }
-    content.push_str(MEGAGREP_SECTION);
+    content.push_str(WDPKR_SECTION);
     std::fs::write(path, content).with_context(|| format!("writing {path}"))?;
     Ok(WriteAction::Appended(format!("{path} (appended)")))
 }
@@ -150,7 +150,7 @@ mod tests {
 
     fn tempdir(label: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "megagrep-init-{label}-{}-{}",
+            "wdpkr-init-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -163,20 +163,20 @@ mod tests {
 
     #[test]
     fn section_template_contains_marker() {
-        assert!(MEGAGREP_SECTION.contains(SECTION_MARKER));
-        assert!(MEGAGREP_SECTION.contains("megagrep search"));
+        assert!(WDPKR_SECTION.contains(SECTION_MARKER));
+        assert!(WDPKR_SECTION.contains("wdpkr search"));
     }
 
     #[test]
-    fn megagrepignore_template_has_lockfiles() {
-        assert!(MEGAGREPIGNORE.contains("package-lock.json"));
-        assert!(MEGAGREPIGNORE.contains("go.sum"));
-        assert!(MEGAGREPIGNORE.contains("Cargo.lock"));
+    fn wdpkrignore_template_has_lockfiles() {
+        assert!(WDPKRIGNORE.contains("package-lock.json"));
+        assert!(WDPKRIGNORE.contains("go.sum"));
+        assert!(WDPKRIGNORE.contains("Cargo.lock"));
     }
 
     #[test]
     fn ci_workflow_template_has_cargo_install() {
-        assert!(CI_WORKFLOW.contains("cargo install megagrep"));
+        assert!(CI_WORKFLOW.contains("cargo install wdpkr"));
         assert!(CI_WORKFLOW.contains("TURBOPUFFER_API_KEY"));
     }
 
@@ -221,7 +221,7 @@ mod tests {
     fn append_section_skips_if_already_present() {
         let dir = tempdir("present");
         let path = dir.join("CLAUDE.md");
-        std::fs::write(&path, format!("# My Project\n\n{MEGAGREP_SECTION}")).unwrap();
+        std::fs::write(&path, format!("# My Project\n\n{WDPKR_SECTION}")).unwrap();
         let path_str = path.to_str().unwrap();
         let action = append_section(path_str).unwrap();
         assert!(matches!(action, WriteAction::Skipped(_)));
