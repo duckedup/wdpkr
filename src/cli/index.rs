@@ -4,6 +4,7 @@ use clap::Args;
 use crate::chunk::tree_sitter::TreeSitterChunker;
 use crate::config::Config;
 use crate::embed::build_embedder;
+use crate::indexer::cost::{self, ProviderRates};
 use crate::indexer::{IndexRun, resolve_namespace};
 use crate::store::build_store;
 use crate::summarize::anthropic::build_summarizer;
@@ -32,14 +33,16 @@ pub struct IndexArgs {
 }
 
 pub async fn run(args: IndexArgs) -> Result<()> {
-    if args.dry_run {
-        bail!("--dry-run is not yet implemented");
-    }
     if args.from.is_some() {
         bail!("--from is not yet implemented");
     }
 
     let config = Config::new()?;
+
+    if args.dry_run {
+        return run_dry_run(&config).await;
+    }
+
     config.embed.validate()?;
     config.summarizer.validate()?;
 
@@ -71,5 +74,18 @@ pub async fn run(args: IndexArgs) -> Result<()> {
         eprintln!("HWM advanced to {sha}");
     }
 
+    Ok(())
+}
+
+async fn run_dry_run(config: &Config) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let chunker = TreeSitterChunker::new();
+
+    eprintln!("Scanning repository...");
+    let report = cost::dry_run(&chunker, &root)?;
+    let rates = ProviderRates::for_models(&config.summarizer.model, &config.embed.model);
+    let report = report.with_cost(&rates);
+
+    report.display(&config.summarizer.model, &config.embed.model);
     Ok(())
 }

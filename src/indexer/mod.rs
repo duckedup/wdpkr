@@ -1,6 +1,7 @@
 //! Indexer: walks the repo, processes each file through the
 //! chunk → summarize → embed → upsert pipeline, and advances the HWM.
 
+pub mod cost;
 pub mod git;
 pub mod pipeline;
 pub mod walk;
