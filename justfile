@@ -1,4 +1,4 @@
-# megagrep — task runner.
+# wdpkr — task runner.
 # Run `just` (or `just --list`) to see available recipes.
 
 # Default: list recipes
@@ -7,7 +7,7 @@ default:
 
 # ── Local dev ──────────────────────────────────────────────────────────────
 
-# Run megagrep with arguments (e.g. `just run search "foo"`)
+# Run wdpkr with arguments (e.g. `just run search "foo"`)
 run *ARGS:
     cargo run -- {{ ARGS }}
 
@@ -84,10 +84,10 @@ package: release-all
     OUT=target/release-archives
     mkdir -p "$OUT"
     for target in aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-        binary="target/$target/release/megagrep"
+        binary="target/$target/release/wdpkr"
         if [ -f "$binary" ]; then
-            archive="$OUT/megagrep-$target.tar.gz"
-            tar -czf "$archive" -C "target/$target/release" megagrep
+            archive="$OUT/wdpkr-$target.tar.gz"
+            tar -czf "$archive" -C "target/$target/release" wdpkr
             echo "Packaged $archive"
         else
             echo "Skipping $target — binary missing at $binary" >&2

@@ -151,7 +151,7 @@ pub struct SearchOptions {
 // ── SearchResult ──────────────────────────────────────────────────────────
 
 /// A single result from a vector search. Serializable to JSON for the
-/// `megagrep search` output.
+/// `wdpkr search` output.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
     pub id: String,

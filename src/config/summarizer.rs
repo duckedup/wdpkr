@@ -23,11 +23,11 @@ impl SummarizerConfig {
         let f = file.as_ref().and_then(|f| f.summarizer.as_ref());
 
         let provider: Resolved<String> = env_or_resolved(
-            "MEGAGREP_SUMMARIZER_PROVIDER",
+            "WDPKR_SUMMARIZER_PROVIDER",
             file_or_resolved(f.and_then(|s| s.provider.clone()), "anthropic".into()),
         );
         let model: Resolved<String> = env_or_resolved(
-            "MEGAGREP_SUMMARIZER_MODEL",
+            "WDPKR_SUMMARIZER_MODEL",
             file_or_resolved(
                 f.and_then(|s| s.model.clone()),
                 "claude-haiku-4-5-20251001".into(),
@@ -73,8 +73,8 @@ mod tests {
 
     fn clear_env() {
         remove_envs(&[
-            "MEGAGREP_SUMMARIZER_PROVIDER",
-            "MEGAGREP_SUMMARIZER_MODEL",
+            "WDPKR_SUMMARIZER_PROVIDER",
+            "WDPKR_SUMMARIZER_MODEL",
             "ANTHROPIC_API_KEY",
         ]);
     }
@@ -93,7 +93,7 @@ mod tests {
     #[serial]
     fn env_overrides() {
         clear_env();
-        set_env("MEGAGREP_SUMMARIZER_MODEL", "claude-sonnet-4-6");
+        set_env("WDPKR_SUMMARIZER_MODEL", "claude-sonnet-4-6");
         set_env("ANTHROPIC_API_KEY", "key-xyz");
         let cfg = SummarizerConfig::from_env(&None);
         assert_eq!(cfg.model, "claude-sonnet-4-6");
@@ -121,7 +121,7 @@ mod tests {
     #[serial]
     fn env_beats_file() {
         clear_env();
-        set_env("MEGAGREP_SUMMARIZER_MODEL", "claude-sonnet-4-6");
+        set_env("WDPKR_SUMMARIZER_MODEL", "claude-sonnet-4-6");
         let file = FileConfig {
             summarizer: Some(FileSummarizerConfig {
                 provider: None,
@@ -186,10 +186,10 @@ mod tests {
     #[serial]
     fn resolve_marks_env_when_env_set() {
         clear_env();
-        set_env("MEGAGREP_SUMMARIZER_MODEL", "claude-sonnet-4-6");
+        set_env("WDPKR_SUMMARIZER_MODEL", "claude-sonnet-4-6");
         set_env("ANTHROPIC_API_KEY", "k");
         let (_, sources) = SummarizerConfig::resolve(&None);
-        assert_eq!(sources.model, Source::Env("MEGAGREP_SUMMARIZER_MODEL"));
+        assert_eq!(sources.model, Source::Env("WDPKR_SUMMARIZER_MODEL"));
         assert_eq!(sources.api_key, Source::Env("ANTHROPIC_API_KEY"));
         clear_env();
     }

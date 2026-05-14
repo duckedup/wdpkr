@@ -65,10 +65,10 @@ Rust 1.95+ required (pinned via `rust-toolchain.toml`). Edition 2024.
 
 ## Architecture Overview
 
-megagrep is a CLI tool that maintains a vector-search index of LLM-generated code summaries. Two commands:
+wdpkr is a CLI tool that maintains a vector-search index of LLM-generated code summaries. Two commands:
 
-- `megagrep index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to Turbopuffer
-- `megagrep search "<query>"` — embeds query, searches Turbopuffer, returns tiered file+symbol JSON
+- `wdpkr index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to Turbopuffer
+- `wdpkr search "<query>"` — embeds query, searches Turbopuffer, returns tiered file+symbol JSON
 
 ```
 src/

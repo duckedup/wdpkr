@@ -70,17 +70,17 @@ mod tests {
 
     fn clear_env() {
         remove_envs(&[
-            "MEGAGREP_STORE_PROVIDER",
-            "MEGAGREP_EMBED_PROVIDER",
-            "MEGAGREP_EMBED_MODEL",
-            "MEGAGREP_NAMESPACE",
-            "MEGAGREP_CONCURRENCY",
-            "MEGAGREP_MAX_COST",
-            "MEGAGREP_HWM_SUCCESS_THRESHOLD",
-            "MEGAGREP_DEFAULT_BRANCH",
-            "MEGAGREP_EMBED_BATCH_SIZE",
-            "MEGAGREP_SUMMARIZER_PROVIDER",
-            "MEGAGREP_SUMMARIZER_MODEL",
+            "WDPKR_STORE_PROVIDER",
+            "WDPKR_EMBED_PROVIDER",
+            "WDPKR_EMBED_MODEL",
+            "WDPKR_NAMESPACE",
+            "WDPKR_CONCURRENCY",
+            "WDPKR_MAX_COST",
+            "WDPKR_HWM_SUCCESS_THRESHOLD",
+            "WDPKR_DEFAULT_BRANCH",
+            "WDPKR_EMBED_BATCH_SIZE",
+            "WDPKR_SUMMARIZER_PROVIDER",
+            "WDPKR_SUMMARIZER_MODEL",
             "TURBOPUFFER_API_KEY",
             "VOYAGE_API_KEY",
             "OPENAI_API_KEY",
@@ -118,7 +118,7 @@ mod tests {
     #[serial]
     fn resolve_namespace_from_config() {
         clear_env();
-        set_env("MEGAGREP_NAMESPACE", "my-repo");
+        set_env("WDPKR_NAMESPACE", "my-repo");
         let config = Config::from_file(None);
         let ns = resolve_namespace(&config).unwrap();
         assert_eq!(ns.as_str(), "my-repo");
@@ -132,7 +132,7 @@ mod tests {
         let config = Config::from_file(None);
         let ns = resolve_namespace(&config).unwrap();
         assert!(
-            ns.as_str().contains("megagrep"),
+            ns.as_str().contains("wdpkr"),
             "should derive namespace from git remote; got: {}",
             ns.as_str()
         );
@@ -143,7 +143,7 @@ mod tests {
     #[serial]
     async fn run_fails_without_store_credentials() {
         clear_env();
-        set_env("MEGAGREP_NAMESPACE", "test-repo");
+        set_env("WDPKR_NAMESPACE", "test-repo");
         set_env("VOYAGE_API_KEY", "fake-key");
         let args = SearchArgs {
             query: "test query".into(),

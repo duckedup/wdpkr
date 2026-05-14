@@ -4,19 +4,19 @@
 //!
 //! - [`Config::new`] — convenience for code that just needs values.
 //! - [`ResolvedConfig::new`] — values **plus** per-field source attribution,
-//!   used by `megagrep config list` / `config get`.
+//!   used by `wdpkr config list` / `config get`.
 //!
 //! ## Validation timing
 //!
 //! `Config::new()` does **not** call `validate()` on subconfigs. Some
-//! subcommands (notably `megagrep config get`) must work without provider
+//! subcommands (notably `wdpkr config get`) must work without provider
 //! credentials. Validation is the responsibility of entry points that
 //! actually hit external APIs (the indexer, the searcher), where missing
 //! credentials are a fail-fast condition.
 //!
 //! ## File location
 //!
-//! The SPEC anchors on `~/.config/megagrep/config.yaml` regardless of OS,
+//! The SPEC anchors on `~/.config/wdpkr/config.yaml` regardless of OS,
 //! honoring `$XDG_CONFIG_HOME` if set. We deliberately do NOT use
 //! `dirs::config_dir()` here — that returns
 //! `~/Library/Application Support/...` on macOS, which contradicts the SPEC.
@@ -24,7 +24,7 @@
 //! ## Malformed config files
 //!
 //! A **missing** config file is fine — the user just hasn't run
-//! `megagrep config init`, defaults are used. A **malformed** config file
+//! `wdpkr config init`, defaults are used. A **malformed** config file
 //! is a hard error: if the user attempted to set config and got it wrong,
 //! we cannot trust which values are intended, so we refuse to proceed
 //! until the file is corrected (or removed to revert to defaults).
@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
 
-/// Boilerplate `config.yaml` written by `megagrep config init`.
+/// Boilerplate `config.yaml` written by `wdpkr config init`.
 /// Kept as a sibling file (not a string literal) so it can carry comments
 /// and example values for first-run UX.
 pub const DEFAULT_CONFIG_YAML: &str = include_str!("default_config.yaml");
@@ -67,7 +67,7 @@ pub enum Source {
 
 impl Source {
     /// Render as a human-friendly suffix, e.g. `default`, `file`, `env: KEY`.
-    /// Used by `megagrep config list`.
+    /// Used by `wdpkr config list`.
     pub fn label(&self) -> String {
         match self {
             Source::Default => "default".to_string(),
@@ -162,7 +162,7 @@ pub struct ResolvedConfig {
     pub sources: ConfigSources,
 }
 
-/// One row in `megagrep config list`.
+/// One row in `wdpkr config list`.
 #[derive(Debug, Clone)]
 pub struct ConfigEntry {
     pub key: &'static str,
@@ -171,7 +171,7 @@ pub struct ConfigEntry {
 }
 
 impl Config {
-    /// Resolve config: defaults → `~/.config/megagrep/config.yaml` → env
+    /// Resolve config: defaults → `~/.config/wdpkr/config.yaml` → env
     /// vars. CLI flag overrides happen at the call site.
     ///
     /// Returns an error if the config file exists but is malformed —
@@ -221,7 +221,7 @@ impl ResolvedConfig {
     }
 
     /// Flat list of (key, value, source) for every non-secret field.
-    /// Drives `megagrep config list`.
+    /// Drives `wdpkr config list`.
     ///
     /// API keys are intentionally excluded — they're sensitive and the SPEC's
     /// `config list` example doesn't show them. A future `config doctor`
@@ -298,7 +298,7 @@ impl ResolvedConfig {
         ]
     }
 
-    /// Look up one entry by dotted key. Drives `megagrep config get`.
+    /// Look up one entry by dotted key. Drives `wdpkr config get`.
     pub fn get(&self, key: &str) -> Option<ConfigEntry> {
         self.entries().into_iter().find(|e| e.key == key)
     }
@@ -371,8 +371,8 @@ pub struct FileIndexerConfig {
 }
 
 impl FileConfig {
-    /// Resolved path of the config file: `$XDG_CONFIG_HOME/megagrep/config.yaml`,
-    /// or `~/.config/megagrep/config.yaml` if `XDG_CONFIG_HOME` is unset.
+    /// Resolved path of the config file: `$XDG_CONFIG_HOME/wdpkr/config.yaml`,
+    /// or `~/.config/wdpkr/config.yaml` if `XDG_CONFIG_HOME` is unset.
     /// SPEC-anchored — uniform across Linux and macOS.
     pub fn path() -> Result<PathBuf> {
         let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -382,7 +382,7 @@ impl FileConfig {
                 .context("could not resolve home directory")?
                 .join(".config")
         };
-        Ok(base.join("megagrep").join("config.yaml"))
+        Ok(base.join("wdpkr").join("config.yaml"))
     }
 
     /// Load the config file.
@@ -390,7 +390,7 @@ impl FileConfig {
     /// Returns:
     /// - `Ok(None)` — the file does not exist; the caller should use
     ///   defaults (this is the normal path for users who haven't run
-    ///   `megagrep config init`).
+    ///   `wdpkr config init`).
     /// - `Ok(Some(cfg))` — file parsed successfully.
     /// - `Err(_)` — the file exists but is unreadable or malformed. The
     ///   user must fix or remove it; we refuse to guess at intended values.
@@ -441,7 +441,7 @@ impl FileConfig {
     /// [`ResolvedConfig::entries`]. Returns an error for unknown keys or
     /// for values that fail to parse into the field's type.
     ///
-    /// Drives `megagrep config set <key> <value>`.
+    /// Drives `wdpkr config set <key> <value>`.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
             "store.provider" => {
@@ -521,19 +521,19 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
-    fn clear_megagrep_env() {
+    fn clear_wdpkr_env() {
         remove_envs(&[
-            "MEGAGREP_STORE_PROVIDER",
-            "MEGAGREP_EMBED_PROVIDER",
-            "MEGAGREP_EMBED_MODEL",
-            "MEGAGREP_EMBED_BATCH_SIZE",
-            "MEGAGREP_SUMMARIZER_PROVIDER",
-            "MEGAGREP_SUMMARIZER_MODEL",
-            "MEGAGREP_NAMESPACE",
-            "MEGAGREP_DEFAULT_BRANCH",
-            "MEGAGREP_CONCURRENCY",
-            "MEGAGREP_MAX_COST",
-            "MEGAGREP_HWM_SUCCESS_THRESHOLD",
+            "WDPKR_STORE_PROVIDER",
+            "WDPKR_EMBED_PROVIDER",
+            "WDPKR_EMBED_MODEL",
+            "WDPKR_EMBED_BATCH_SIZE",
+            "WDPKR_SUMMARIZER_PROVIDER",
+            "WDPKR_SUMMARIZER_MODEL",
+            "WDPKR_NAMESPACE",
+            "WDPKR_DEFAULT_BRANCH",
+            "WDPKR_CONCURRENCY",
+            "WDPKR_MAX_COST",
+            "WDPKR_HWM_SUCCESS_THRESHOLD",
             "TURBOPUFFER_API_KEY",
             "VOYAGE_API_KEY",
             "OPENAI_API_KEY",
@@ -550,7 +550,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("megagrep-{label}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("wdpkr-{label}-{}-{nanos}", std::process::id()))
     }
 
     // ── Existing coverage (preserved) ─────────────────────────────────
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     #[serial]
     fn config_assembles_with_all_defaults() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let cfg = Config::from_file(None);
         assert_eq!(cfg.store.provider, "turbopuffer");
         assert_eq!(cfg.embed.provider, "voyage");
@@ -570,27 +570,27 @@ mod tests {
     #[test]
     #[serial]
     fn env_or_uses_env_when_set() {
-        set_env("__MEGAGREP_TEST_ENV_OR_KEY", "42");
-        let v: u32 = env_or("__MEGAGREP_TEST_ENV_OR_KEY", 1);
+        set_env("__WDPKR_TEST_ENV_OR_KEY", "42");
+        let v: u32 = env_or("__WDPKR_TEST_ENV_OR_KEY", 1);
         assert_eq!(v, 42);
-        remove_env("__MEGAGREP_TEST_ENV_OR_KEY");
+        remove_env("__WDPKR_TEST_ENV_OR_KEY");
     }
 
     #[test]
     #[serial]
     fn env_or_falls_back_when_unset() {
-        remove_env("__MEGAGREP_TEST_ENV_OR_UNSET");
-        let v: u32 = env_or("__MEGAGREP_TEST_ENV_OR_UNSET", 7);
+        remove_env("__WDPKR_TEST_ENV_OR_UNSET");
+        let v: u32 = env_or("__WDPKR_TEST_ENV_OR_UNSET", 7);
         assert_eq!(v, 7);
     }
 
     #[test]
     #[serial]
     fn env_or_falls_back_when_unparseable() {
-        set_env("__MEGAGREP_TEST_ENV_OR_BAD", "not_a_number");
-        let v: u32 = env_or("__MEGAGREP_TEST_ENV_OR_BAD", 99);
+        set_env("__WDPKR_TEST_ENV_OR_BAD", "not_a_number");
+        let v: u32 = env_or("__WDPKR_TEST_ENV_OR_BAD", 99);
         assert_eq!(v, 99);
-        remove_env("__MEGAGREP_TEST_ENV_OR_BAD");
+        remove_env("__WDPKR_TEST_ENV_OR_BAD");
     }
 
     #[test]
@@ -608,7 +608,7 @@ mod tests {
     #[test]
     #[serial]
     fn file_values_used_when_env_absent() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let file = FileConfig {
             indexer: Some(FileIndexerConfig {
                 concurrency: Some(32),
@@ -623,8 +623,8 @@ mod tests {
     #[test]
     #[serial]
     fn env_overrides_file_values() {
-        clear_megagrep_env();
-        set_env("MEGAGREP_CONCURRENCY", "64");
+        clear_wdpkr_env();
+        set_env("WDPKR_CONCURRENCY", "64");
         let file = FileConfig {
             indexer: Some(FileIndexerConfig {
                 concurrency: Some(32),
@@ -634,7 +634,7 @@ mod tests {
         };
         let cfg = Config::from_file(Some(file));
         assert_eq!(cfg.indexer.concurrency, 64);
-        clear_megagrep_env();
+        clear_wdpkr_env();
     }
 
     #[test]
@@ -668,7 +668,7 @@ indexer:
     #[test]
     #[serial]
     fn source_default_when_no_env_no_file() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let resolved = ResolvedConfig::from_file(None);
         assert_eq!(resolved.sources.indexer.concurrency, Source::Default);
         assert_eq!(resolved.sources.embed.provider, Source::Default);
@@ -677,7 +677,7 @@ indexer:
     #[test]
     #[serial]
     fn source_file_when_only_file_provides() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let file = FileConfig {
             indexer: Some(FileIndexerConfig {
                 concurrency: Some(24),
@@ -692,8 +692,8 @@ indexer:
     #[test]
     #[serial]
     fn source_env_when_env_overrides_file() {
-        clear_megagrep_env();
-        set_env("MEGAGREP_CONCURRENCY", "40");
+        clear_wdpkr_env();
+        set_env("WDPKR_CONCURRENCY", "40");
         let file = FileConfig {
             indexer: Some(FileIndexerConfig {
                 concurrency: Some(24),
@@ -704,16 +704,16 @@ indexer:
         let resolved = ResolvedConfig::from_file(Some(file));
         assert_eq!(
             resolved.sources.indexer.concurrency,
-            Source::Env("MEGAGREP_CONCURRENCY")
+            Source::Env("WDPKR_CONCURRENCY")
         );
-        clear_megagrep_env();
+        clear_wdpkr_env();
     }
 
     #[test]
     fn source_label_renders_correctly() {
         assert_eq!(Source::Default.label(), "default");
         assert_eq!(Source::File.label(), "file");
-        assert_eq!(Source::Env("MEGAGREP_FOO").label(), "env: MEGAGREP_FOO");
+        assert_eq!(Source::Env("WDPKR_FOO").label(), "env: WDPKR_FOO");
     }
 
     // ── entries / get ─────────────────────────────────────────────────
@@ -721,7 +721,7 @@ indexer:
     #[test]
     #[serial]
     fn entries_lists_every_non_secret_field() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let resolved = ResolvedConfig::from_file(None);
         let entries = resolved.entries();
         let keys: Vec<&str> = entries.iter().map(|e| e.key).collect();
@@ -748,8 +748,8 @@ indexer:
     #[test]
     #[serial]
     fn entries_carry_source_for_each_field() {
-        clear_megagrep_env();
-        set_env("MEGAGREP_EMBED_MODEL", "voyage-3-large");
+        clear_wdpkr_env();
+        set_env("WDPKR_EMBED_MODEL", "voyage-3-large");
         let resolved = ResolvedConfig::from_file(None);
         let model = resolved
             .entries()
@@ -757,14 +757,14 @@ indexer:
             .find(|e| e.key == "embedder.model")
             .expect("embedder.model entry");
         assert_eq!(model.value, "voyage-3-large");
-        assert_eq!(model.source, Source::Env("MEGAGREP_EMBED_MODEL"));
-        clear_megagrep_env();
+        assert_eq!(model.source, Source::Env("WDPKR_EMBED_MODEL"));
+        clear_wdpkr_env();
     }
 
     #[test]
     #[serial]
     fn get_returns_one_entry() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let resolved = ResolvedConfig::from_file(None);
         let e = resolved.get("indexer.concurrency").expect("entry exists");
         assert_eq!(e.value, "8");
@@ -774,7 +774,7 @@ indexer:
     #[test]
     #[serial]
     fn get_returns_none_for_unknown_key() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let resolved = ResolvedConfig::from_file(None);
         assert!(resolved.get("totally.bogus.key").is_none());
     }
@@ -852,20 +852,17 @@ indexer:
     #[test]
     #[serial]
     fn path_respects_xdg_config_home() {
-        clear_megagrep_env();
-        set_env("XDG_CONFIG_HOME", "/tmp/megagrep-xdg-test");
+        clear_wdpkr_env();
+        set_env("XDG_CONFIG_HOME", "/tmp/wdpkr-xdg-test");
         let p = FileConfig::path().unwrap();
-        assert_eq!(
-            p,
-            PathBuf::from("/tmp/megagrep-xdg-test/megagrep/config.yaml")
-        );
-        clear_megagrep_env();
+        assert_eq!(p, PathBuf::from("/tmp/wdpkr-xdg-test/wdpkr/config.yaml"));
+        clear_wdpkr_env();
     }
 
     #[test]
     #[serial]
     fn save_then_load_round_trip() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let tmp = unique_tempdir("save-load");
         std::fs::create_dir_all(&tmp).unwrap();
         set_env("XDG_CONFIG_HOME", tmp.to_str().unwrap());
@@ -886,7 +883,7 @@ indexer:
         );
 
         std::fs::remove_dir_all(&tmp).ok();
-        clear_megagrep_env();
+        clear_wdpkr_env();
     }
 
     #[test]
@@ -894,7 +891,7 @@ indexer:
     #[cfg(unix)]
     fn save_uses_0600_permissions() {
         use std::os::unix::fs::PermissionsExt;
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let tmp = unique_tempdir("perms");
         std::fs::create_dir_all(&tmp).unwrap();
         set_env("XDG_CONFIG_HOME", tmp.to_str().unwrap());
@@ -904,29 +901,29 @@ indexer:
         assert_eq!(mode, 0o600);
 
         std::fs::remove_dir_all(&tmp).ok();
-        clear_megagrep_env();
+        clear_wdpkr_env();
     }
 
     #[test]
     #[serial]
     fn load_returns_ok_none_for_missing_file() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let tmp = unique_tempdir("missing");
         // Note: do NOT create the dir — file should be missing.
         set_env("XDG_CONFIG_HOME", tmp.to_str().unwrap());
         // Missing file is the normal "no config yet" case — not an error.
         let loaded = FileConfig::load().expect("missing file is Ok(None), not Err");
         assert!(loaded.is_none());
-        clear_megagrep_env();
+        clear_wdpkr_env();
     }
 
     #[test]
     #[serial]
     fn load_errors_on_malformed_yaml() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let tmp = unique_tempdir("malformed");
-        std::fs::create_dir_all(tmp.join("megagrep")).unwrap();
-        std::fs::write(tmp.join("megagrep/config.yaml"), "not: : valid: yaml: [").unwrap();
+        std::fs::create_dir_all(tmp.join("wdpkr")).unwrap();
+        std::fs::write(tmp.join("wdpkr/config.yaml"), "not: : valid: yaml: [").unwrap();
         set_env("XDG_CONFIG_HOME", tmp.to_str().unwrap());
 
         // Hard error per design: a malformed file means the user attempted
@@ -945,16 +942,16 @@ indexer:
         );
 
         std::fs::remove_dir_all(&tmp).ok();
-        clear_megagrep_env();
+        clear_wdpkr_env();
     }
 
     #[test]
     #[serial]
     fn config_new_propagates_malformed_error() {
-        clear_megagrep_env();
+        clear_wdpkr_env();
         let tmp = unique_tempdir("propagate");
-        std::fs::create_dir_all(tmp.join("megagrep")).unwrap();
-        std::fs::write(tmp.join("megagrep/config.yaml"), "not: : valid: yaml: [").unwrap();
+        std::fs::create_dir_all(tmp.join("wdpkr")).unwrap();
+        std::fs::write(tmp.join("wdpkr/config.yaml"), "not: : valid: yaml: [").unwrap();
         set_env("XDG_CONFIG_HOME", tmp.to_str().unwrap());
 
         // Both top-level constructors must surface the load error so the
@@ -963,6 +960,6 @@ indexer:
         assert!(ResolvedConfig::new().is_err());
 
         std::fs::remove_dir_all(&tmp).ok();
-        clear_megagrep_env();
+        clear_wdpkr_env();
     }
 }

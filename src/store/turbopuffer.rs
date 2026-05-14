@@ -2,7 +2,7 @@
 //!
 //! Implements [`VectorStore`] against Turbopuffer's v2 HTTP API. Metadata
 //! (HWM SHA, embedder identity) is stored as a reserved vector with ID
-//! `__megagrep_meta__`.
+//! `__wdpkr_meta__`.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -17,7 +17,7 @@ use super::{
 };
 use crate::config::StoreConfig;
 
-const META_VECTOR_ID: &str = "__megagrep_meta__";
+const META_VECTOR_ID: &str = "__wdpkr_meta__";
 const MAX_RETRIES: usize = 3;
 const UPSERT_BATCH_SIZE: usize = 200;
 
@@ -1044,7 +1044,7 @@ mod tests {
     fn metadata_round_trip_with_extra_fields() {
         let mut extra = HashMap::new();
         extra.insert("version".into(), "2".into());
-        extra.insert("created_by".into(), "megagrep".into());
+        extra.insert("created_by".into(), "wdpkr".into());
         let meta = NamespaceMetadata {
             hwm_sha: Some("def456".into()),
             embedder: Some("openai/text-embedding-3-large".into()),
@@ -1059,7 +1059,7 @@ mod tests {
         );
         assert_eq!(back.extra.len(), 2);
         assert_eq!(back.extra["version"], "2");
-        assert_eq!(back.extra["created_by"], "megagrep");
+        assert_eq!(back.extra["created_by"], "wdpkr");
     }
 
     // ── doc_to_row completeness ──────────────────────────────────────

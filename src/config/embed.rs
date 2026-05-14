@@ -30,11 +30,11 @@ impl EmbedConfig {
         let f = file.as_ref().and_then(|f| f.embedder.as_ref());
 
         let provider: Resolved<String> = env_or_resolved(
-            "MEGAGREP_EMBED_PROVIDER",
+            "WDPKR_EMBED_PROVIDER",
             file_or_resolved(f.and_then(|e| e.provider.clone()), "voyage".into()),
         );
 
-        // Default model is provider-derived: setting MEGAGREP_EMBED_PROVIDER
+        // Default model is provider-derived: setting WDPKR_EMBED_PROVIDER
         // alone must yield a sensible model for that provider.
         let default_model = match provider.value.as_str() {
             "voyage" => "voyage-code-3",
@@ -44,11 +44,11 @@ impl EmbedConfig {
         };
 
         let model: Resolved<String> = env_or_resolved(
-            "MEGAGREP_EMBED_MODEL",
+            "WDPKR_EMBED_MODEL",
             file_or_resolved(f.and_then(|e| e.model.clone()), default_model.into()),
         );
         let batch_size: Resolved<usize> = env_or_resolved(
-            "MEGAGREP_EMBED_BATCH_SIZE",
+            "WDPKR_EMBED_BATCH_SIZE",
             file_or_resolved(f.and_then(|e| e.batch_size), 64),
         );
         let voyage_api_key: Resolved<String> = env_or_resolved(
@@ -90,7 +90,7 @@ impl EmbedConfig {
     /// Validate that the selected provider's required credential is set.
     /// Called by the indexer/searcher at startup — fail fast, not on first
     /// API call. Not called by `Config::new` itself, so subcommands that do
-    /// not hit the embedder (e.g. `megagrep config get`) work without keys.
+    /// not hit the embedder (e.g. `wdpkr config get`) work without keys.
     pub fn validate(&self) -> Result<()> {
         match self.provider.as_str() {
             "voyage" if self.voyage_api_key.is_empty() => {
@@ -113,9 +113,9 @@ mod tests {
 
     fn clear_env() {
         remove_envs(&[
-            "MEGAGREP_EMBED_PROVIDER",
-            "MEGAGREP_EMBED_MODEL",
-            "MEGAGREP_EMBED_BATCH_SIZE",
+            "WDPKR_EMBED_PROVIDER",
+            "WDPKR_EMBED_MODEL",
+            "WDPKR_EMBED_BATCH_SIZE",
             "VOYAGE_API_KEY",
             "OPENAI_API_KEY",
             "OLLAMA_HOST",
@@ -138,7 +138,7 @@ mod tests {
     #[serial]
     fn ollama_provider_picks_nomic_default_model() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "ollama");
+        set_env("WDPKR_EMBED_PROVIDER", "ollama");
         let cfg = EmbedConfig::from_env(&None);
         assert_eq!(cfg.provider, "ollama");
         assert_eq!(cfg.model, "nomic-embed-text");
@@ -149,7 +149,7 @@ mod tests {
     #[serial]
     fn openai_provider_picks_3_large_default_model() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "openai");
+        set_env("WDPKR_EMBED_PROVIDER", "openai");
         let cfg = EmbedConfig::from_env(&None);
         assert_eq!(cfg.provider, "openai");
         assert_eq!(cfg.model, "text-embedding-3-large");
@@ -160,8 +160,8 @@ mod tests {
     #[serial]
     fn explicit_model_overrides_provider_default() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "ollama");
-        set_env("MEGAGREP_EMBED_MODEL", "mxbai-embed-large");
+        set_env("WDPKR_EMBED_PROVIDER", "ollama");
+        set_env("WDPKR_EMBED_MODEL", "mxbai-embed-large");
         let cfg = EmbedConfig::from_env(&None);
         assert_eq!(cfg.model, "mxbai-embed-large");
         clear_env();
@@ -171,7 +171,7 @@ mod tests {
     #[serial]
     fn batch_size_env_override() {
         clear_env();
-        set_env("MEGAGREP_EMBED_BATCH_SIZE", "128");
+        set_env("WDPKR_EMBED_BATCH_SIZE", "128");
         let cfg = EmbedConfig::from_env(&None);
         assert_eq!(cfg.batch_size, 128);
         clear_env();
@@ -181,7 +181,7 @@ mod tests {
     #[serial]
     fn unknown_provider_falls_through_to_voyage_default_model() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "made-up");
+        set_env("WDPKR_EMBED_PROVIDER", "made-up");
         let cfg = EmbedConfig::from_env(&None);
         assert_eq!(cfg.provider, "made-up");
         assert_eq!(cfg.model, "voyage-code-3");
@@ -214,7 +214,7 @@ mod tests {
     #[serial]
     fn env_beats_file_for_provider() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "voyage");
+        set_env("WDPKR_EMBED_PROVIDER", "voyage");
         let file = FileConfig {
             embedder: Some(FileEmbedConfig {
                 provider: Some("ollama".into()),
@@ -252,7 +252,7 @@ mod tests {
     #[serial]
     fn validate_passes_for_ollama_without_any_key() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "ollama");
+        set_env("WDPKR_EMBED_PROVIDER", "ollama");
         let cfg = EmbedConfig::from_env(&None);
         assert!(cfg.validate().is_ok());
         clear_env();
@@ -262,7 +262,7 @@ mod tests {
     #[serial]
     fn validate_fails_for_openai_without_key() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "openai");
+        set_env("WDPKR_EMBED_PROVIDER", "openai");
         let cfg = EmbedConfig::from_env(&None);
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("OPENAI_API_KEY"));
@@ -305,11 +305,11 @@ mod tests {
     #[serial]
     fn resolve_marks_env_when_env_set() {
         clear_env();
-        set_env("MEGAGREP_EMBED_PROVIDER", "ollama");
-        set_env("MEGAGREP_EMBED_BATCH_SIZE", "256");
+        set_env("WDPKR_EMBED_PROVIDER", "ollama");
+        set_env("WDPKR_EMBED_BATCH_SIZE", "256");
         let (_, sources) = EmbedConfig::resolve(&None);
-        assert_eq!(sources.provider, Source::Env("MEGAGREP_EMBED_PROVIDER"));
-        assert_eq!(sources.batch_size, Source::Env("MEGAGREP_EMBED_BATCH_SIZE"));
+        assert_eq!(sources.provider, Source::Env("WDPKR_EMBED_PROVIDER"));
+        assert_eq!(sources.batch_size, Source::Env("WDPKR_EMBED_BATCH_SIZE"));
         clear_env();
     }
 }
