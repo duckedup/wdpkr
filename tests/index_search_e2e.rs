@@ -442,6 +442,70 @@ async fn incremental_index_only_processes_changed_files() {
 }
 
 #[tokio::test]
+async fn incremental_index_removes_stale_symbols() {
+    let dir = create_fixture_repo("stale-syms");
+
+    let store = Arc::new(MockVectorStore::new());
+    let ns = Namespace::from("test-stale");
+
+    // Full index — payments.rs has release_payment + process_refund
+    let index = IndexRun::new(
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
+        ns.clone(),
+        1,
+    );
+    index.run(true, &dir).await.unwrap();
+
+    // Count vectors for payments.rs before modification
+    let before = store.document_count(&ns, "src/payments.rs");
+    assert!(before >= 3, "expected file + 2 symbols, got {before}");
+
+    // Remove process_refund, keep release_payment
+    std::fs::write(
+        dir.join("src/payments.rs"),
+        r#"use std::io;
+
+/// Releases a commission payment to a payee.
+pub fn release_payment(payee_id: u64, amount: f64) -> Result<(), String> {
+    if amount <= 0.0 {
+        return Err("amount must be positive".into());
+    }
+    println!("Releasing {amount} to payee {payee_id}");
+    Ok(())
+}
+"#,
+    )
+    .unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-m", "remove process_refund"]);
+
+    // Incremental index
+    let index2 = IndexRun::new(
+        Arc::new(TreeSitterChunker::new()),
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(ArcStore(store.clone())),
+        ns.clone(),
+        1,
+    );
+    index2.run(false, &dir).await.unwrap();
+
+    // After: should have fewer vectors (stale process_refund symbol removed)
+    let after = store.document_count(&ns, "src/payments.rs");
+    assert!(
+        after < before,
+        "expected fewer vectors after symbol removal: before={before}, after={after}"
+    );
+    // Should have exactly file + 1 symbol now
+    assert_eq!(after, 2, "expected file + 1 symbol, got {after}");
+
+    cleanup(&dir);
+}
+
+#[tokio::test]
 async fn json_output_is_valid_after_full_pipeline() {
     let dir = create_fixture_repo("json-output");
 
