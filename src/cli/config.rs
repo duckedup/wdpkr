@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::config::{FileConfig, ResolvedConfig};
 use super::prompt::{non_empty, prompt_choice, prompt_secret};
+use crate::config::{FileConfig, ResolvedConfig};
 
 #[derive(Args, Debug)]
 pub struct ConfigArgs {
@@ -127,7 +127,6 @@ async fn run_init() -> Result<()> {
     println!("API keys are stored in this file (mode 0600). Env vars override file values.");
     Ok(())
 }
-
 
 async fn run_get(key: &str) -> Result<()> {
     let resolved = ResolvedConfig::new()?;

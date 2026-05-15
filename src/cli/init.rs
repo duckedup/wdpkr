@@ -90,7 +90,9 @@ pub async fn run(_args: InitArgs) -> Result<()> {
     }
 
     println!();
-    println!("Next: run `wdpkr config init` to configure API keys and providers for indexing and search.");
+    println!(
+        "Next: run `wdpkr config init` to configure API keys and providers for indexing and search."
+    );
 
     Ok(())
 }
