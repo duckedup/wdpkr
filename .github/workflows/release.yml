@@ -55,9 +55,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
-          - target: x86_64-apple-darwin
-            os: macos-13
-            use_cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
             use_cross: false
@@ -126,14 +123,21 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-publish-
 
       - name: Publish
-        run: cargo publish
+        run: |
+          cargo publish 2>&1 || {
+            if cargo publish 2>&1 | grep -q "already uploaded"; then
+              echo "Version already published to crates.io, skipping"
+            else
+              exit 1
+            fi
+          }
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   github-release:
     name: Create GitHub Release
     needs: [check-version, build-binaries, publish-crate]
-    if: needs.check-version.outputs.should_release == 'true'
+    if: "!failure() && !cancelled() && needs.check-version.outputs.should_release == 'true'"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
