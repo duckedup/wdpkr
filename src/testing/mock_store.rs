@@ -32,6 +32,21 @@ impl MockVectorStore {
     }
 }
 
+impl MockVectorStore {
+    pub fn document_count(&self, ns: &Namespace, file_path: &str) -> usize {
+        let lock = self.namespaces.lock().unwrap();
+        lock.get(ns.as_str())
+            .map(|ns_data| {
+                ns_data
+                    .documents
+                    .values()
+                    .filter(|d| d.file_path == file_path)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+}
+
 impl Default for MockVectorStore {
     fn default() -> Self {
         Self::new()

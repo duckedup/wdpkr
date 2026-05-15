@@ -1,10 +1,10 @@
 [package]
 name = "wdpkr"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
-description = "Conceptual codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
-license = "MIT OR Apache-2.0"
+description = "Codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
+license = "MIT"
 
 [lib]
 name = "wdpkr"

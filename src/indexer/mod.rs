@@ -266,6 +266,18 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
                 t.summarize.as_secs_f64(),
                 t.embed.as_secs_f64(),
             );
+            // Delete existing vectors for this file before upserting so that
+            // symbols removed since the last index don't linger as stale results.
+            if let Err(e) = store.delete_by_file(namespace, rel_path).await {
+                eprintln!(
+                    "  [{:>4}/{}] {rel_path} — pre-upsert delete error: {e}",
+                    index + 1,
+                    total
+                );
+                return FileResult {
+                    outcome: FileOutcome::Failed,
+                };
+            }
             match store.upsert(namespace, &result.documents).await {
                 Ok(stats) => FileResult {
                     outcome: FileOutcome::Processed {

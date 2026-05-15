@@ -1,6 +1,7 @@
 pub mod config;
 pub mod index;
 pub mod init;
+pub mod prompt;
 pub mod search;
 
 pub use config::{ConfigArgs, ConfigCommand};
