@@ -5,7 +5,6 @@ edition = "2024"
 rust-version = "1.95"
 description = "Conceptual codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
 license = "MIT OR Apache-2.0"
-publish = false
 
 [lib]
 name = "wdpkr"
