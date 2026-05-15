@@ -233,6 +233,7 @@ mod tests {
         std::fs::remove_dir_all(tmp).ok();
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn path_prints_resolved_path() {
@@ -329,6 +330,7 @@ mod tests {
         teardown(&tmp);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn get_returns_default_value() {
@@ -343,6 +345,7 @@ mod tests {
         teardown(&tmp);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn get_errors_on_unknown_key() {
@@ -358,6 +361,7 @@ mod tests {
         teardown(&tmp);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn set_then_get_round_trips() {
@@ -382,6 +386,7 @@ mod tests {
         teardown(&tmp);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn set_invalid_value_errors() {
@@ -398,6 +403,7 @@ mod tests {
         teardown(&tmp);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn set_unknown_key_errors() {
@@ -414,6 +420,7 @@ mod tests {
         teardown(&tmp);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn list_succeeds_with_defaults() {
@@ -426,6 +433,7 @@ mod tests {
         teardown(&tmp);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn edit_errors_without_config_file() {

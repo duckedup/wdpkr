@@ -192,6 +192,7 @@ mod tests {
         assert_eq!(estimate_tokens("a".repeat(200_000).as_str()), 50_000);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn small_file_uses_normal_flow() {
         let s = MockSummarizer::new();
@@ -211,6 +212,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn big_file_uses_rollup_flow() {
         let s = MockSummarizer::new();
@@ -230,6 +232,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn exact_threshold_uses_normal_flow() {
         let s = MockSummarizer::new();
@@ -241,6 +244,7 @@ mod tests {
         assert!(result.file_summary.contains("src/giant.rs"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn empty_symbols_returns_file_summary_only() {
         let s = MockSummarizer::new();

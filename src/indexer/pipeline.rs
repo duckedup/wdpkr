@@ -168,6 +168,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn process_rust_file() {
         let chunker = TreeSitterChunker::new();
@@ -218,6 +219,7 @@ pub fn goodbye() {
         }
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn process_rust_file_has_timing() {
         let chunker = TreeSitterChunker::new();
@@ -239,6 +241,7 @@ pub fn goodbye() {
         assert!(result.timing.embed < Duration::from_secs(5));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn process_unknown_language_file() {
         let chunker = TreeSitterChunker::new();
@@ -261,6 +264,7 @@ pub fn goodbye() {
         assert_eq!(result.symbol_count, 0);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn all_document_ids_are_unique() {
         let chunker = TreeSitterChunker::new();

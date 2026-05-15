@@ -125,6 +125,7 @@ mod tests {
         clear_env();
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     #[serial]
     fn resolve_namespace_derives_from_git_when_empty() {
@@ -139,6 +140,7 @@ mod tests {
         clear_env();
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     #[serial]
     async fn run_fails_without_store_credentials() {

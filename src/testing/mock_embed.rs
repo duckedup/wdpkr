@@ -104,6 +104,7 @@ impl Embedder for MockEmbedder {
 mod tests {
     use super::*;
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn deterministic_same_text_same_vector() {
         let e = MockEmbedder::new(8);
@@ -112,6 +113,7 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn different_text_different_vector() {
         let e = MockEmbedder::new(8);
@@ -120,6 +122,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn override_takes_precedence() {
         let mut e = MockEmbedder::new(3);
@@ -128,6 +131,7 @@ mod tests {
         assert_eq!(v, vec![1.0, 0.0, 0.0]);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn non_override_falls_back_to_hash() {
         let mut e = MockEmbedder::new(3);
@@ -137,6 +141,7 @@ mod tests {
         assert_eq!(v.len(), 3);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embed_batch_matches_individual() {
         let e = MockEmbedder::new(8);
@@ -149,6 +154,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn hash_vectors_are_unit_length() {
         let e = MockEmbedder::new(128);
@@ -157,6 +163,7 @@ mod tests {
         assert!((mag - 1.0).abs() < 1e-5, "expected unit length, got {mag}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn dimension_matches_config() {
         let e = MockEmbedder::new(256);

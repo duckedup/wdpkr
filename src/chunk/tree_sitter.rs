@@ -239,6 +239,7 @@ mod tests {
 
     // ── Rust ──────────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_function() {
         let src = r#"
@@ -252,6 +253,7 @@ fn hello() {
         assert_eq!(chunks.symbols[0].kind, "function");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_struct_and_enum() {
         let src = r#"
@@ -272,6 +274,7 @@ pub enum Color {
         assert!(names.contains(&"Color"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_impl_methods() {
         let src = r#"
@@ -292,6 +295,7 @@ impl Foo {
         assert!(names.contains(&"baz"), "method baz: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_doc_comment() {
         let src = r#"
@@ -310,6 +314,7 @@ fn documented() {}
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_use_imports() {
         let src = r#"
@@ -324,6 +329,7 @@ fn main() {}
         assert!(chunks.imports[1].module.contains("anyhow"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_trait() {
         let src = r#"
@@ -337,6 +343,7 @@ pub trait Drawable {
         assert!(names.contains(&"Drawable"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_line_numbers_are_1_based() {
         let src = "fn first() {}\nfn second() {}";
@@ -345,6 +352,7 @@ pub trait Drawable {
         assert_eq!(chunks.symbols[1].start_line, 2);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_signature_excludes_body() {
         let src = r#"
@@ -360,6 +368,7 @@ pub fn process(input: &str) -> Result<()> {
 
     // ── Go ────────────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn go_extracts_function() {
         let src = r#"
@@ -374,6 +383,7 @@ func Hello() string {
         assert!(names.contains(&"Hello"), "got: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn go_extracts_imports() {
         let src = r#"
@@ -389,6 +399,7 @@ func main() {}
 
     // ── Python ────────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn python_extracts_function_and_class() {
         let src = r#"
@@ -405,6 +416,7 @@ class Person:
         assert!(names.contains(&"Person"), "got: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn python_extracts_methods_from_class() {
         let src = r#"
@@ -424,6 +436,7 @@ class Calculator:
 
     // ── TypeScript ────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn typescript_extracts_function_and_interface() {
         let src = r#"
@@ -442,6 +455,7 @@ function greet(user: User): string {
         assert!(names.contains(&"greet"), "got: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn typescript_extracts_type_alias_and_enum() {
         let src = r#"
@@ -463,6 +477,7 @@ export function getRole(): UserRole {
         assert!(names.contains(&"Status"), "enum: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn typescript_extracts_class_methods() {
         let src = r#"
@@ -485,6 +500,7 @@ class UserService {
         assert!(names.contains(&"create"), "method: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn typescript_extracts_imports() {
         let src = r#"
@@ -503,6 +519,7 @@ export function handler(req: Request, res: Response): void {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn typescript_arrow_function_export() {
         let src = r#"
@@ -519,6 +536,7 @@ export const processPayment = async (amount: number): Promise<void> => {
 
     // ── TSX ───────────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn tsx_parses_jsx_without_errors() {
         let src = r#"
@@ -545,6 +563,7 @@ export function Greeting({ name, count }: Props): JSX.Element {
         assert!(names.contains(&"Greeting"), "function: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn tsx_extracts_component_class() {
         let src = r#"
@@ -572,6 +591,7 @@ class Counter extends Component<{}, State> {
         assert!(names.contains(&"Counter"), "class component: {names:?}");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn typescript_barrel_reexports_no_parse_errors() {
         let src = r#"
@@ -591,6 +611,7 @@ export { default as App } from './App.svelte';
         let _ = &chunks;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn tsx_barrel_reexports_no_parse_errors() {
         let src = r#"
@@ -603,6 +624,7 @@ export * from './utils';
         assert_eq!(chunks.file_content, src);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn tsx_file_extension_maps_to_tsx_language() {
         assert_eq!(crate::chunk::detect_language("App.tsx"), Some("tsx"));
@@ -614,6 +636,7 @@ export * from './utils';
 
     // ── Java ──────────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn java_extracts_class_and_methods() {
         let src = r#"
@@ -636,6 +659,7 @@ public class Calculator {
 
     // ── Fallback ──────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn unknown_language_returns_file_only() {
         let chunks = chunk("some content", "brainfuck");
@@ -644,6 +668,7 @@ public class Calculator {
         assert_eq!(chunks.file_content, "some content");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn malformed_code_still_returns_file_content() {
         let src = "fn broken( {{{{{ this is not valid rust";

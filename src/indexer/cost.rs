@@ -244,6 +244,7 @@ mod tests {
         assert_eq!(format_tokens(1_500_000), "1.5M");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn dry_run_on_current_repo() {
         let chunker = TreeSitterChunker::new();
@@ -255,6 +256,7 @@ mod tests {
         assert!(report.estimated_vectors > 0);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn dry_run_includes_prompt_overhead() {
         let chunker = TreeSitterChunker::new();
@@ -273,6 +275,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn dry_run_cost_on_current_repo() {
         let chunker = TreeSitterChunker::new();
