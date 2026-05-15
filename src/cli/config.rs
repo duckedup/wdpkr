@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::config::{FileConfig, ResolvedConfig};
+use super::prompt::{non_empty, prompt_choice, prompt_secret};
 
 #[derive(Args, Debug)]
 pub struct ConfigArgs {
@@ -127,51 +128,6 @@ async fn run_init() -> Result<()> {
     Ok(())
 }
 
-fn prompt_choice(label: &str, options: &[&str], default: &str) -> Result<String> {
-    if options.len() == 1 {
-        println!("{label}: {default}");
-        return Ok(default.to_string());
-    }
-    eprint!("{label}");
-    for (i, opt) in options.iter().enumerate() {
-        let marker = if *opt == default { " (default)" } else { "" };
-        eprint!("\n  {}) {opt}{marker}", i + 1);
-    }
-    eprint!("\nChoice [{}]: ", default);
-
-    let input = read_line()?;
-    if input.is_empty() {
-        return Ok(default.to_string());
-    }
-    if let Ok(idx) = input.parse::<usize>()
-        && idx >= 1
-        && idx <= options.len()
-    {
-        return Ok(options[idx - 1].to_string());
-    }
-    if options.contains(&input.as_str()) {
-        return Ok(input);
-    }
-    eprintln!("  Using default: {default}");
-    Ok(default.to_string())
-}
-
-fn prompt_secret(label: &str) -> Result<String> {
-    eprint!("{label} (Enter to skip): ");
-    read_line()
-}
-
-fn read_line() -> Result<String> {
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .context("reading input")?;
-    Ok(input.trim().to_string())
-}
-
-fn non_empty(s: String) -> Option<String> {
-    if s.is_empty() { None } else { Some(s) }
-}
 
 async fn run_get(key: &str) -> Result<()> {
     let resolved = ResolvedConfig::new()?;
