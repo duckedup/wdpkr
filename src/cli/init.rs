@@ -21,54 +21,45 @@ pub async fn run(_args: InitArgs) -> Result<()> {
     let mut skipped = Vec::new();
 
     // ── 1. Agent context file ─────────────────────────────────────────
-    let claude_exists = Path::new("CLAUDE.md").exists();
-    let agents_exists = Path::new("AGENTS.md").exists();
+    let existing: Vec<&str> = ["CLAUDE.md", "AGENTS.md"]
+        .into_iter()
+        .filter(|p| Path::new(p).exists())
+        .collect();
 
-    if claude_exists && agents_exists {
-        for path in ["CLAUDE.md", "AGENTS.md"] {
-            match append_section(path) {
-                Ok(action) => collect_action(action, &mut wrote, &mut skipped),
-                Err(e) => eprintln!("warning: {path}: {e}"),
-            }
-        }
-    } else if claude_exists {
-        match append_section("CLAUDE.md") {
-            Ok(action) => collect_action(action, &mut wrote, &mut skipped),
-            Err(e) => eprintln!("warning: CLAUDE.md: {e}"),
-        }
-    } else if agents_exists {
-        match append_section("AGENTS.md") {
-            Ok(action) => collect_action(action, &mut wrote, &mut skipped),
-            Err(e) => eprintln!("warning: AGENTS.md: {e}"),
-        }
-    } else {
+    if existing.is_empty() {
         let choice = prompt_agent_file()?;
         std::fs::write(choice.as_str(), WDPKR_SECTION)
             .with_context(|| format!("writing {choice}"))?;
         wrote.push(format!("{choice} (created)"));
+    } else {
+        for path in existing {
+            try_collect(append_section(path), path, &mut wrote, &mut skipped);
+        }
     }
 
     // ── 2. .wdpkrignore ───────────────────────────────────────────────
     println!();
-    match write_if_missing(".wdpkrignore", WDPKRIGNORE) {
-        Ok(action) => collect_action(action, &mut wrote, &mut skipped),
-        Err(e) => eprintln!("warning: .wdpkrignore: {e}"),
-    }
+    try_collect(
+        write_if_missing(".wdpkrignore", WDPKRIGNORE),
+        ".wdpkrignore",
+        &mut wrote,
+        &mut skipped,
+    );
 
     // ── 3. Indexer workflow ───────────────────────────────────────────
     println!();
-    let add_workflow = prompt_confirm("Add GitHub Actions indexer workflow?", true)?;
-
-    if add_workflow {
+    if prompt_confirm("Add GitHub Actions indexer workflow?", true)? {
         let workflow_dir = ".github/workflows";
         let workflow_path = format!("{workflow_dir}/wdpkr.yml");
         if let Err(e) = std::fs::create_dir_all(workflow_dir) {
             eprintln!("warning: could not create {workflow_dir}: {e}");
         } else {
-            match write_if_missing(&workflow_path, CI_WORKFLOW) {
-                Ok(action) => collect_action(action, &mut wrote, &mut skipped),
-                Err(e) => eprintln!("warning: CI workflow: {e}"),
-            }
+            try_collect(
+                write_if_missing(&workflow_path, CI_WORKFLOW),
+                "CI workflow",
+                &mut wrote,
+                &mut skipped,
+            );
         }
 
         println!();
@@ -117,15 +108,20 @@ fn prompt_agent_file() -> Result<String> {
 }
 
 enum WriteAction {
-    Created(String),
-    Appended(String),
+    Wrote(String),
     Skipped(String),
 }
 
-fn collect_action(action: WriteAction, wrote: &mut Vec<String>, skipped: &mut Vec<String>) {
-    match action {
-        WriteAction::Created(p) | WriteAction::Appended(p) => wrote.push(p),
-        WriteAction::Skipped(p) => skipped.push(p),
+fn try_collect(
+    result: Result<WriteAction>,
+    label: &str,
+    wrote: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+) {
+    match result {
+        Ok(WriteAction::Wrote(p)) => wrote.push(p),
+        Ok(WriteAction::Skipped(p)) => skipped.push(p),
+        Err(e) => eprintln!("warning: {label}: {e}"),
     }
 }
 
@@ -134,7 +130,7 @@ fn write_if_missing(path: &str, content: &str) -> Result<WriteAction> {
         return Ok(WriteAction::Skipped(path.to_string()));
     }
     std::fs::write(path, content).with_context(|| format!("writing {path}"))?;
-    Ok(WriteAction::Created(path.to_string()))
+    Ok(WriteAction::Wrote(path.to_string()))
 }
 
 fn append_section(path: &str) -> Result<WriteAction> {
@@ -148,7 +144,7 @@ fn append_section(path: &str) -> Result<WriteAction> {
     }
     content.push_str(WDPKR_SECTION);
     std::fs::write(path, content).with_context(|| format!("writing {path}"))?;
-    Ok(WriteAction::Appended(format!("{path} (appended)")))
+    Ok(WriteAction::Wrote(format!("{path} (appended)")))
 }
 
 #[cfg(test)]
@@ -194,7 +190,7 @@ mod tests {
         let path = dir.join("test.txt");
         let path_str = path.to_str().unwrap();
         let action = write_if_missing(path_str, "hello").unwrap();
-        assert!(matches!(action, WriteAction::Created(_)));
+        assert!(matches!(action, WriteAction::Wrote(_)));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -218,7 +214,7 @@ mod tests {
         std::fs::write(&path, "# My Project\n\nExisting content.\n").unwrap();
         let path_str = path.to_str().unwrap();
         let action = append_section(path_str).unwrap();
-        assert!(matches!(action, WriteAction::Appended(_)));
+        assert!(matches!(action, WriteAction::Wrote(_)));
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("# My Project"));
         assert!(content.contains(SECTION_MARKER));
@@ -243,7 +239,7 @@ mod tests {
         std::fs::write(&path, "# Agent Instructions\n").unwrap();
         let path_str = path.to_str().unwrap();
         let action = append_section(path_str).unwrap();
-        assert!(matches!(action, WriteAction::Appended(_)));
+        assert!(matches!(action, WriteAction::Wrote(_)));
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("# Agent Instructions"));
         assert!(content.contains(SECTION_MARKER));
