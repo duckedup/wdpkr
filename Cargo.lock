@@ -1699,6 +1699,7 @@ dependencies = [
  "blake3",
  "clap",
  "dirs",
+ "globset",
  "ignore",
  "owo-colors",
  "reqwest",

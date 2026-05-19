@@ -32,7 +32,7 @@ pub fn compression(
     report: &SearchReport,
     source_contents: &[(String, String)],
 ) -> CompressionMetrics {
-    let json = render_json(report).unwrap_or_default();
+    let json = render_json(report, false).unwrap_or_default();
     let output_tokens = approx_token_count(&json);
 
     let source_tokens: usize = source_contents

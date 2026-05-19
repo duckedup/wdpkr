@@ -177,8 +177,11 @@ impl VectorStore for MockVectorStore {
             .documents
             .values()
             .filter(|doc| {
-                if let Some(ref prefix) = opts.path_prefix
-                    && !doc.file_path.starts_with(prefix.as_str())
+                if !opts.path_prefixes.is_empty()
+                    && !opts
+                        .path_prefixes
+                        .iter()
+                        .any(|p| doc.file_path.starts_with(p.as_str()))
                 {
                     return false;
                 }
@@ -383,7 +386,7 @@ mod tests {
                 &[1.0, 0.0, 0.0],
                 &SearchOptions {
                     top_k: 10,
-                    path_prefix: Some("src/finance/".into()),
+                    path_prefixes: vec!["src/finance/".into()],
                     ..Default::default()
                 },
             )
@@ -391,6 +394,36 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].file_path, "src/finance/a.rs");
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_multiple_prefixes() {
+        let store = MockVectorStore::new();
+        store.create_namespace(&ns("repo"), 3).await.unwrap();
+
+        let docs = vec![
+            doc_with_vector("a", "src/finance/a.rs", vec![1.0, 0.0, 0.0]),
+            doc_with_vector("b", "src/auth/b.rs", vec![1.0, 0.0, 0.0]),
+            doc_with_vector("c", "src/api/c.rs", vec![1.0, 0.0, 0.0]),
+        ];
+        store.upsert(&ns("repo"), &docs).await.unwrap();
+
+        let results = store
+            .search(
+                &ns("repo"),
+                &[1.0, 0.0, 0.0],
+                &SearchOptions {
+                    top_k: 10,
+                    path_prefixes: vec!["src/finance/".into(), "src/auth/".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        let paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+        assert!(paths.contains(&"src/finance/a.rs"));
+        assert!(paths.contains(&"src/auth/b.rs"));
     }
 
     #[tokio::test]
