@@ -25,9 +25,17 @@ pub struct SearchArgs {
     #[arg(long)]
     pub no_symbols: bool,
 
-    /// Limit search to a subtree (path prefix)
+    /// Limit search to subtree(s); repeatable
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub scope: Vec<String>,
+
+    /// Glob pattern to filter result paths (repeatable, OR logic)
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub filter: Vec<String>,
+
+    /// Compact output: paths + one-sentence summaries, no symbols
     #[arg(long)]
-    pub scope: Option<String>,
+    pub terse: bool,
 
     /// Human-readable output instead of JSON
     #[arg(long)]
@@ -46,17 +54,18 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         query: args.query.clone(),
         top_k: args.top_k,
         symbols_per_file: args.symbols_per_file,
-        no_symbols: args.no_symbols,
+        no_symbols: args.no_symbols || args.terse,
         scope: args.scope.clone(),
+        filters: args.filter.clone(),
     };
 
     let search = SearchRun::new(embedder, store, namespace);
     let report = search.run(&params).await?;
 
     let rendered = if args.pretty {
-        output::render_pretty(&report)
+        output::render_pretty(&report, args.terse)
     } else {
-        output::render_json(&report)?
+        output::render_json(&report, args.terse)?
     };
     print!("{rendered}");
     Ok(())
@@ -97,7 +106,9 @@ mod tests {
             top_k: 10,
             symbols_per_file: 5,
             no_symbols: true,
-            scope: Some("src/finance/".into()),
+            scope: vec!["src/finance/".into()],
+            filter: vec![],
+            terse: false,
             pretty: false,
         };
         let params = SearchParams {
@@ -106,12 +117,13 @@ mod tests {
             symbols_per_file: args.symbols_per_file,
             no_symbols: args.no_symbols,
             scope: args.scope.clone(),
+            filters: vec![],
         };
         assert_eq!(params.query, "find commission payments");
         assert_eq!(params.top_k, 10);
         assert_eq!(params.symbols_per_file, 5);
         assert!(params.no_symbols);
-        assert_eq!(params.scope.as_deref(), Some("src/finance/"));
+        assert_eq!(params.scope, vec!["src/finance/".to_string()]);
     }
 
     #[test]
@@ -150,7 +162,9 @@ mod tests {
             top_k: 5,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filter: vec![],
+            terse: false,
             pretty: false,
         };
         let err = run(args).await.unwrap_err();

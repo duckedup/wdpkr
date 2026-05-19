@@ -149,7 +149,7 @@ pub struct VectorDocument {
 #[derive(Debug, Clone, Default)]
 pub struct SearchOptions {
     pub top_k: usize,
-    pub path_prefix: Option<String>,
+    pub path_prefixes: Vec<String>,
     pub chunk_kind: Option<ChunkKind>,
     pub language: Option<String>,
     pub min_score: Option<f32>,
@@ -308,7 +308,7 @@ mod tests {
     fn search_options_default() {
         let opts = SearchOptions::default();
         assert_eq!(opts.top_k, 0);
-        assert!(opts.path_prefix.is_none());
+        assert!(opts.path_prefixes.is_empty());
         assert!(opts.chunk_kind.is_none());
         assert!(opts.language.is_none());
         assert!(opts.min_score.is_none());

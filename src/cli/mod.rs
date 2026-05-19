@@ -89,7 +89,7 @@ mod tests {
                 assert_eq!(args.top_k, 5);
                 assert_eq!(args.symbols_per_file, 3);
                 assert!(!args.no_symbols);
-                assert!(args.scope.is_none());
+                assert!(args.scope.is_empty());
                 assert!(!args.pretty);
             }
             _ => panic!("expected Search"),
@@ -117,7 +117,7 @@ mod tests {
                 assert_eq!(args.top_k, 10);
                 assert_eq!(args.symbols_per_file, 5);
                 assert!(args.no_symbols);
-                assert_eq!(args.scope.as_deref(), Some("internal/finance/"));
+                assert_eq!(args.scope, vec!["internal/finance/".to_string()]);
                 assert!(args.pretty);
             }
             _ => panic!("expected Search"),

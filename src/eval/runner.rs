@@ -101,7 +101,8 @@ impl EvalRunner {
             top_k: case.top_k,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         };
 
         let report = self.search.run(&params).await?;

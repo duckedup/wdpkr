@@ -320,12 +320,23 @@ fn build_search_filters(opts: &SearchOptions) -> Option<serde_json::Value> {
     let mut conditions: Vec<serde_json::Value> = Vec::new();
     conditions.push(serde_json::json!(["id", "NotEq", META_VECTOR_ID]));
 
-    if let Some(ref prefix) = opts.path_prefix {
-        conditions.push(serde_json::json!([
-            "file_path",
-            "Glob",
-            format!("{prefix}*")
-        ]));
+    match opts.path_prefixes.len() {
+        0 => {}
+        1 => {
+            conditions.push(serde_json::json!([
+                "file_path",
+                "Glob",
+                format!("{}*", opts.path_prefixes[0])
+            ]));
+        }
+        _ => {
+            let prefix_conditions: Vec<_> = opts
+                .path_prefixes
+                .iter()
+                .map(|p| serde_json::json!(["file_path", "Glob", format!("{p}*")]))
+                .collect();
+            conditions.push(serde_json::json!(["Or", prefix_conditions]));
+        }
     }
     if let Some(ref kind) = opts.chunk_kind {
         conditions.push(serde_json::json!(["chunk_kind", "Eq", kind.to_string()]));
@@ -871,19 +882,36 @@ mod tests {
     }
 
     #[test]
-    fn filters_path_prefix_uses_glob() {
+    fn filters_single_prefix_uses_glob() {
         let opts = SearchOptions {
-            path_prefix: Some("src/finance/".into()),
+            path_prefixes: vec!["src/finance/".into()],
             ..Default::default()
         };
         let filters = build_search_filters(&opts).unwrap();
         assert_eq!(filters[0], "And");
         let inner = filters[1].as_array().unwrap();
         assert_eq!(inner.len(), 2);
-        // Second condition is the Glob filter
         assert_eq!(inner[1][0], "file_path");
         assert_eq!(inner[1][1], "Glob");
         assert_eq!(inner[1][2], "src/finance/*");
+    }
+
+    #[test]
+    fn filters_multiple_prefixes_uses_or() {
+        let opts = SearchOptions {
+            path_prefixes: vec!["src/finance/".into(), "src/annuity/".into()],
+            ..Default::default()
+        };
+        let filters = build_search_filters(&opts).unwrap();
+        assert_eq!(filters[0], "And");
+        let inner = filters[1].as_array().unwrap();
+        assert_eq!(inner.len(), 2);
+        let or_cond = &inner[1];
+        assert_eq!(or_cond[0], "Or");
+        let or_inner = or_cond[1].as_array().unwrap();
+        assert_eq!(or_inner.len(), 2);
+        assert_eq!(or_inner[0][2], "src/finance/*");
+        assert_eq!(or_inner[1][2], "src/annuity/*");
     }
 
     #[test]
@@ -917,7 +945,7 @@ mod tests {
     #[test]
     fn filters_all_options_produces_four_conditions() {
         let opts = SearchOptions {
-            path_prefix: Some("src/".into()),
+            path_prefixes: vec!["src/".into()],
             chunk_kind: Some(ChunkKind::File),
             language: Some("python".into()),
             ..Default::default()
