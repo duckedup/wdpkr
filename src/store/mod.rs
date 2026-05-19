@@ -141,6 +141,12 @@ pub struct VectorDocument {
     /// blake3 hash of the source file content. Used by the indexer to skip
     /// files whose content hasn't changed since last index.
     pub content_hash: Option<String>,
+    /// Outbound call identifiers (unresolved). `None` = not yet indexed
+    /// with call-graph data; `Some(vec![])` = genuinely no outbound calls.
+    pub calls: Option<Vec<String>>,
+    /// Symbols that reference this one. `None` = not yet indexed with
+    /// call-graph data; `Some(vec![])` = genuinely no inbound callers.
+    pub called_by: Option<Vec<String>>,
 }
 
 // ── SearchOptions ─────────────────────────────────────────────────────────
@@ -176,6 +182,10 @@ pub struct SearchResult {
     pub end_line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calls: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub called_by: Option<Vec<String>>,
 }
 
 // ── UpsertStats ───────────────────────────────────────────────────────────
@@ -275,6 +285,8 @@ mod tests {
             start_line: None,
             end_line: None,
             language: Some("rust".into()),
+            calls: None,
+            called_by: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("symbol_name"));
@@ -297,11 +309,47 @@ mod tests {
             start_line: Some(10),
             end_line: Some(25),
             language: Some("rust".into()),
+            calls: Some(vec!["init".into(), "start".into()]),
+            called_by: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains(r#""symbol_name":"run""#));
         assert!(json.contains(r#""symbol_kind":"function""#));
         assert!(json.contains(r#""start_line":10"#));
+        assert!(json.contains(r#""calls":["init","start"]"#));
+        assert!(!json.contains("called_by"));
+    }
+
+    #[test]
+    fn calls_none_vs_some_empty_semantics() {
+        let not_indexed = SearchResult {
+            id: "a".into(),
+            score: 0.5,
+            file_path: "a.rs".into(),
+            chunk_kind: ChunkKind::Symbol,
+            symbol_name: None,
+            symbol_kind: None,
+            summary: "".into(),
+            start_line: None,
+            end_line: None,
+            language: None,
+            calls: None,
+            called_by: None,
+        };
+        let json = serde_json::to_string(&not_indexed).unwrap();
+        assert!(!json.contains("calls"), "None should be omitted from JSON");
+
+        let no_callers = SearchResult {
+            calls: Some(vec![]),
+            called_by: Some(vec![]),
+            ..not_indexed
+        };
+        let json = serde_json::to_string(&no_callers).unwrap();
+        assert!(
+            json.contains(r#""calls":[]"#),
+            "Some([]) should serialize as empty array"
+        );
+        assert!(json.contains(r#""called_by":[]"#));
     }
 
     #[test]

@@ -407,6 +407,12 @@ fn doc_to_row(doc: &VectorDocument) -> HashMap<String, serde_json::Value> {
     if let Some(ref hash) = doc.content_hash {
         row.insert("content_hash".into(), serde_json::json!(hash));
     }
+    if let Some(ref calls) = doc.calls {
+        row.insert("calls".into(), serde_json::json!(calls));
+    }
+    if let Some(ref called_by) = doc.called_by {
+        row.insert("called_by".into(), serde_json::json!(called_by));
+    }
     row
 }
 
@@ -462,6 +468,15 @@ fn row_to_search_result(
     };
     let get_u32 =
         |key: &str| -> Option<u32> { row.get(key).and_then(|v| v.as_u64()).map(|n| n as u32) };
+    let get_string_vec = |key: &str| -> Option<Vec<String>> {
+        row.get(key).and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+        })
+    };
 
     let chunk_kind_str = get_str("chunk_kind").unwrap_or_else(|| "file".into());
     let chunk_kind = match chunk_kind_str.as_str() {
@@ -480,6 +495,8 @@ fn row_to_search_result(
         start_line: get_u32("start_line"),
         end_line: get_u32("end_line"),
         language: get_str("language"),
+        calls: get_string_vec("calls"),
+        called_by: get_string_vec("called_by"),
     })
 }
 
@@ -602,6 +619,8 @@ mod tests {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["id"], "test-1");
@@ -627,6 +646,8 @@ mod tests {
             end_line: Some(25),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["symbol_name"], "process");
@@ -649,6 +670,8 @@ mod tests {
             end_line: None,
             language: None,
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let body = WriteRequest {
             upsert_rows: Some(vec![doc_to_row(&doc)]),
@@ -1151,6 +1174,8 @@ mod tests {
             end_line: Some(200),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 10); // id, vector, summary, file_path, chunk_kind + 5 optional
@@ -1177,6 +1202,8 @@ mod tests {
             end_line: None,
             language: None,
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 5); // id, vector, summary, file_path, chunk_kind

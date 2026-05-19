@@ -243,6 +243,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-release".into(),
@@ -256,6 +258,8 @@ mod tests {
                 end_line: Some(78),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-correct".into(),
@@ -269,6 +273,8 @@ mod tests {
                 end_line: Some(95),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             // Auth module — close to [0,1,0]
             VectorDocument {
@@ -283,6 +289,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-authenticate".into(),
@@ -296,6 +304,8 @@ mod tests {
                 end_line: Some(30),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             // API module — close to [0,0,1]
             VectorDocument {
@@ -310,6 +320,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-handle".into(),
@@ -323,6 +335,8 @@ mod tests {
                 end_line: Some(20),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
         ];
         store.upsert(&Namespace::from("test"), &docs).await.unwrap();

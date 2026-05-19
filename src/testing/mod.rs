@@ -35,6 +35,8 @@ pub fn sample_document(file_path: &str, chunk_kind: ChunkKind) -> VectorDocument
         end_line: None,
         language: Some("rust".into()),
         content_hash: None,
+        calls: None,
+        called_by: None,
     }
 }
 
@@ -58,6 +60,8 @@ pub fn sample_symbol_document(
         end_line: Some(end_line),
         language: Some("rust".into()),
         content_hash: None,
+        calls: None,
+        called_by: None,
     }
 }
 
@@ -74,6 +78,8 @@ pub fn sample_result(file_path: &str, score: f32, chunk_kind: ChunkKind) -> Sear
         start_line: None,
         end_line: None,
         language: Some("rust".into()),
+        calls: None,
+        called_by: None,
     }
 }
 
@@ -96,6 +102,8 @@ pub fn sample_symbol_result(
         start_line: Some(lines.0),
         end_line: Some(lines.1),
         language: Some("rust".into()),
+        calls: None,
+        called_by: None,
     }
 }
 

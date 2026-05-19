@@ -42,6 +42,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "s-release".into(),
@@ -55,6 +57,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: Some(45),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "s-refund".into(),
@@ -68,6 +72,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: Some(80),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "f-users".into(),
@@ -81,6 +87,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "s-create-user".into(),
@@ -94,6 +102,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: Some(25),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
     ];
 

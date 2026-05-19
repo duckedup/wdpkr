@@ -238,6 +238,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "f-lib".into(),
@@ -251,6 +253,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
         ];
         store.upsert(&Namespace::from("test"), &docs).await.unwrap();
