@@ -223,6 +223,8 @@ impl VectorStore for MockVectorStore {
                 start_line: doc.start_line,
                 end_line: doc.end_line,
                 language: doc.language.clone(),
+                calls: doc.calls.clone(),
+                called_by: doc.called_by.clone(),
             })
             .collect())
     }
@@ -261,6 +263,8 @@ mod tests {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         }
     }
 
