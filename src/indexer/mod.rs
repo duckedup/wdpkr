@@ -186,19 +186,11 @@ impl IndexRun {
 
         resolve_call_edges(&mut all_documents);
 
-        let mut upserted = 0usize;
-        for chunk in all_documents.chunks(200) {
-            match self.store.upsert(&self.namespace, chunk).await {
-                Ok(stats) => upserted += stats.upserted,
-                Err(e) => {
-                    eprintln!(
-                        "  {} {}",
-                        "batch upsert error:".if_supports_color(Stream::Stderr, |s| s.red()),
-                        e,
-                    );
-                }
-            }
-        }
+        let upserted = self
+            .store
+            .upsert(&self.namespace, &all_documents)
+            .await?
+            .upserted;
 
         let new_meta = NamespaceMetadata {
             hwm_sha: Some(head.clone()),
@@ -330,24 +322,23 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
     }
 }
 
-fn resolve_call_edges(documents: &mut [VectorDocument]) {
+pub fn resolve_call_edges(documents: &mut [VectorDocument]) {
     use std::collections::HashMap;
 
-    // Phase 1: build owned symbol table and called_by map
-    let mut symbol_table: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for doc in documents.iter() {
+    let mut symbol_table: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
+    for (i, doc) in documents.iter().enumerate() {
         if doc.chunk_kind == ChunkKind::Symbol
             && let Some(ref name) = doc.symbol_name
         {
             symbol_table
-                .entry(name.clone())
+                .entry(name.as_str())
                 .or_default()
-                .push((doc.file_path.clone(), doc.id.clone()));
+                .push((i, doc.file_path.as_str()));
         }
     }
 
-    let mut called_by_map: HashMap<String, Vec<String>> = HashMap::new();
-    for doc in documents.iter() {
+    let mut called_by_map: HashMap<usize, Vec<String>> = HashMap::new();
+    for (i, doc) in documents.iter().enumerate() {
         if doc.chunk_kind != ChunkKind::Symbol {
             continue;
         }
@@ -355,39 +346,51 @@ fn resolve_call_edges(documents: &mut [VectorDocument]) {
             let caller_name = doc.symbol_name.as_deref().unwrap_or("?");
             let caller_ref = format!("{}:{}", doc.file_path, caller_name);
             for call_name in calls {
-                if let Some(targets) = symbol_table.get(call_name) {
-                    for (_, target_id) in targets {
-                        called_by_map
-                            .entry(target_id.clone())
-                            .or_default()
-                            .push(caller_ref.clone());
+                if let Some(targets) = symbol_table.get(call_name.as_str()) {
+                    for &(target_idx, _) in targets {
+                        if target_idx != i {
+                            called_by_map
+                                .entry(target_idx)
+                                .or_default()
+                                .push(caller_ref.clone());
+                        }
                     }
                 }
             }
         }
     }
 
-    // Phase 2: apply resolved edges
-    for doc in documents.iter_mut() {
-        if doc.chunk_kind != ChunkKind::Symbol {
-            continue;
-        }
-
-        if let Some(ref raw_calls) = doc.calls {
-            let resolved: Vec<String> = raw_calls
+    let resolved_calls: Vec<(usize, Vec<String>)> = documents
+        .iter()
+        .enumerate()
+        .filter(|(_, doc)| doc.chunk_kind == ChunkKind::Symbol && doc.calls.is_some())
+        .map(|(i, doc)| {
+            let resolved: Vec<String> = doc
+                .calls
+                .as_ref()
+                .unwrap()
                 .iter()
                 .flat_map(|name| {
                     symbol_table
-                        .get(name)
+                        .get(name.as_str())
                         .into_iter()
                         .flatten()
-                        .map(move |(file, _)| format!("{file}:{name}"))
+                        .map(move |&(_, file)| format!("{file}:{name}"))
                 })
                 .collect();
-            doc.calls = Some(resolved);
-        }
+            (i, resolved)
+        })
+        .collect();
 
-        doc.called_by = Some(called_by_map.remove(&doc.id).unwrap_or_default());
+    drop(symbol_table);
+
+    for (i, resolved) in resolved_calls {
+        documents[i].calls = Some(resolved);
+    }
+    for (i, doc) in documents.iter_mut().enumerate() {
+        if doc.chunk_kind == ChunkKind::Symbol {
+            doc.called_by = Some(called_by_map.remove(&i).unwrap_or_default());
+        }
     }
 }
 
@@ -489,21 +492,7 @@ mod tests {
 
     #[test]
     fn resolve_skips_file_level_documents() {
-        let mut docs = vec![VectorDocument {
-            id: "f1".into(),
-            vector: vec![0.0; 3],
-            summary: String::new(),
-            file_path: "src/a.rs".into(),
-            chunk_kind: ChunkKind::File,
-            symbol_name: None,
-            symbol_kind: None,
-            start_line: None,
-            end_line: None,
-            language: Some("rust".into()),
-            content_hash: None,
-            calls: None,
-            called_by: None,
-        }];
+        let mut docs = vec![crate::testing::sample_document("src/a.rs", ChunkKind::File)];
 
         resolve_call_edges(&mut docs);
 

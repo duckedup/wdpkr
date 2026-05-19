@@ -51,7 +51,11 @@ pub trait VectorStore: Send + Sync {
     /// in the namespace. Used by the indexer to skip unchanged files.
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>>;
 
-    // ── Search ──
+    // ── Read ──
+
+    /// Return all documents in the namespace, including vectors.
+    /// Used by `--skip-summaries` to re-upsert with updated metadata.
+    async fn list_documents(&self, ns: &Namespace) -> Result<Vec<VectorDocument>>;
 
     async fn search(
         &self,

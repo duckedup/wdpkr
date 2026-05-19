@@ -162,6 +162,14 @@ impl VectorStore for MockVectorStore {
         Ok(hashes)
     }
 
+    async fn list_documents(&self, ns: &Namespace) -> Result<Vec<VectorDocument>> {
+        let lock = self.namespaces.lock().unwrap();
+        let ns_data = lock
+            .get(ns.as_str())
+            .ok_or_else(|| anyhow::anyhow!("namespace '{}' not found", ns.as_str()))?;
+        Ok(ns_data.documents.values().cloned().collect())
+    }
+
     async fn search(
         &self,
         ns: &Namespace,
