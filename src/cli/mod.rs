@@ -1,10 +1,12 @@
 pub mod config;
+pub mod eval;
 pub mod index;
 pub mod init;
 pub mod prompt;
 pub mod search;
 
 pub use config::{ConfigArgs, ConfigCommand};
+pub use eval::EvalArgs;
 pub use index::IndexArgs;
 pub use init::InitArgs;
 pub use search::SearchArgs;
@@ -41,6 +43,8 @@ pub enum Command {
     Index(IndexArgs),
     /// Initialize wdpkr for a repository
     Init(InitArgs),
+    /// Run evaluation suite to measure search quality and compression
+    Eval(EvalArgs),
 }
 
 /// Dispatch to the appropriate subcommand handler.
@@ -50,6 +54,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Search(args) => search::run(args).await,
         Command::Index(args) => index::run(args).await,
         Command::Init(args) => init::run(args).await,
+        Command::Eval(args) => eval::run(args).await,
     }
 }
 
