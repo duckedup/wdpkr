@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
+use owo_colors::{OwoColorize, Stream, Style};
 
 use super::prompt::{non_empty, prompt_choice, prompt_secret};
-use crate::config::{FileConfig, ResolvedConfig};
+use crate::config::{FileConfig, ResolvedConfig, Source};
 
 #[derive(Args, Debug)]
 pub struct ConfigArgs {
@@ -153,12 +154,21 @@ async fn run_list() -> Result<()> {
     let entries = resolved.entries();
     let max_key = entries.iter().map(|e| e.key.len()).max().unwrap_or(0);
     for entry in &entries {
+        let key = format!("{:<width$}", entry.key, width = max_key);
+        let value = format!("{:<25}", entry.value);
+        let label = format!("[{}]", entry.source.label());
+
+        let value_style = match entry.source {
+            Source::Env(_) => Style::new().green(),
+            Source::File => Style::new().cyan(),
+            Source::Default => Style::new(),
+        };
+
         println!(
-            "{:<width$} = {:<25} [{}]",
-            entry.key,
-            entry.value,
-            entry.source.label(),
-            width = max_key
+            "{} = {} {}",
+            key.if_supports_color(Stream::Stdout, |s| s.dimmed()),
+            value.if_supports_color(Stream::Stdout, |s| s.style(value_style)),
+            label.if_supports_color(Stream::Stdout, |s| s.dimmed()),
         );
     }
     Ok(())
