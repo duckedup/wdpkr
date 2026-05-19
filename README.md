@@ -1,6 +1,6 @@
 # wdpkr
 
-Conceptual codebase search for AI coding agents. Maintains a vector-search index of LLM-generated summaries and exposes a single `wdpkr search` command that returns tiered, file+symbol results as JSON.
+Semantic code search for AI agents. Taps through your codebase to find exactly where things live.
 
 **wdpkr is not a replacement for grep/ripgrep.** It's the conceptual layer on top — "where does the commission system live?" rather than "find the string `CommissionService`."
 
