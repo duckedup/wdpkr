@@ -603,6 +603,12 @@ impl VectorStore for ArcStore {
     ) -> anyhow::Result<std::collections::HashMap<String, String>> {
         self.0.get_content_hashes(ns).await
     }
+    async fn list_documents(
+        &self,
+        ns: &Namespace,
+    ) -> anyhow::Result<Vec<wdpkr::store::VectorDocument>> {
+        self.0.list_documents(ns).await
+    }
     async fn search(
         &self,
         ns: &Namespace,
