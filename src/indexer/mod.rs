@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, bail};
+use owo_colors::{OwoColorize, Stream};
 use tokio::sync::Semaphore;
 
 use crate::chunk::Chunker;
@@ -124,8 +125,10 @@ impl IndexRun {
 
         let total = to_process.len();
         eprintln!(
-            "  {total} files to process (concurrency: {})",
+            "  {} files to process (concurrency: {})",
+            total.if_supports_color(Stream::Stderr, |s| s.cyan()),
             self.concurrency
+                .if_supports_color(Stream::Stderr, |s| s.cyan()),
         );
 
         let semaphore = Arc::new(Semaphore::new(self.concurrency));
@@ -237,7 +240,13 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
     let content = match std::fs::read_to_string(abs_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("  [{:>4}/{}] {rel_path} — error: {e}", index + 1, total);
+            let idx = format!("{:>4}/{}", index + 1, total);
+            eprintln!(
+                "  [{}] {rel_path} {} {}",
+                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                format!("error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
+            );
             return FileResult {
                 outcome: FileOutcome::Failed,
             };
@@ -255,24 +264,33 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
         };
     }
 
+    let idx = format!("{:>4}/{}", index + 1, total);
+
     match pipeline::process_file(rel_path, &content, chunker, summarizer, embedder).await {
         Ok(result) => {
             let t = &result.timing;
-            eprintln!(
-                "  [{:>4}/{}] {rel_path} ({} symbols) — summarize: {:.1}s, embed: {:.1}s",
-                index + 1,
-                total,
-                result.symbol_count,
+            let syms = format!("({} symbols)", result.symbol_count);
+            let timing = format!(
+                "summarize: {:.1}s, embed: {:.1}s",
                 t.summarize.as_secs_f64(),
                 t.embed.as_secs_f64(),
+            );
+            eprintln!(
+                "  [{}] {rel_path} {} {} {}",
+                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                syms.if_supports_color(Stream::Stderr, |s| s.green()),
+                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                timing.if_supports_color(Stream::Stderr, |s| s.yellow()),
             );
             // Delete existing vectors for this file before upserting so that
             // symbols removed since the last index don't linger as stale results.
             if let Err(e) = store.delete_by_file(namespace, rel_path).await {
                 eprintln!(
-                    "  [{:>4}/{}] {rel_path} — pre-upsert delete error: {e}",
-                    index + 1,
-                    total
+                    "  [{}] {rel_path} {} {}",
+                    idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                    "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                    format!("pre-upsert delete error: {e}")
+                        .if_supports_color(Stream::Stderr, |s| s.red()),
                 );
                 return FileResult {
                     outcome: FileOutcome::Failed,
@@ -286,9 +304,10 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
                 },
                 Err(e) => {
                     eprintln!(
-                        "  [{:>4}/{}] {rel_path} — upsert error: {e}",
-                        index + 1,
-                        total
+                        "  [{}] {rel_path} {} {}",
+                        idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                        "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                        format!("upsert error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
                     );
                     FileResult {
                         outcome: FileOutcome::Failed,
@@ -297,7 +316,12 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
             }
         }
         Err(e) => {
-            eprintln!("  [{:>4}/{}] {rel_path} — error: {e}", index + 1, total);
+            eprintln!(
+                "  [{}] {rel_path} {} {}",
+                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                format!("error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
+            );
             FileResult {
                 outcome: FileOutcome::Failed,
             }

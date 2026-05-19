@@ -4,8 +4,9 @@
 use std::fmt::Write;
 
 use anyhow::Result;
+use owo_colors::{OwoColorize, Stream, Style};
 
-use super::{FileResult, SearchReport};
+use super::{FileResult, SearchReport, SymbolResult};
 
 /// Render the report as pretty-printed JSON. This is the default output
 /// format — agents parse it directly.
@@ -18,12 +19,22 @@ pub fn render_pretty(report: &SearchReport) -> String {
     let mut out = String::new();
 
     if report.results.is_empty() {
-        writeln!(out, "{DIM}No results.{RESET}").unwrap();
+        writeln!(
+            out,
+            "{}",
+            "No results.".if_supports_color(Stream::Stdout, |s| s.dimmed())
+        )
+        .unwrap();
         return out;
     }
 
     if let Some(ref sha) = report.indexed_at {
-        writeln!(out, "{DIM}indexed at {sha}{RESET}").unwrap();
+        writeln!(
+            out,
+            "{}",
+            format!("indexed at {sha}").if_supports_color(Stream::Stdout, |s| s.dimmed())
+        )
+        .unwrap();
     }
 
     for (i, file) in report.results.iter().enumerate() {
@@ -35,46 +46,78 @@ pub fn render_pretty(report: &SearchReport) -> String {
     out
 }
 
+fn score_style(score: f32) -> Style {
+    if score >= 0.80 {
+        Style::new().green()
+    } else if score >= 0.50 {
+        Style::new().yellow()
+    } else {
+        Style::new().dimmed()
+    }
+}
+
+fn kind_style(kind: &str) -> Style {
+    match kind {
+        "function" | "method" => Style::new(),
+        "struct" | "class" => Style::new().cyan(),
+        "trait" | "interface" => Style::new().magenta(),
+        "enum" => Style::new().yellow(),
+        "impl" => Style::new().cyan(),
+        _ => Style::new().dimmed(),
+    }
+}
+
 fn render_file(out: &mut String, file: &FileResult) {
+    let path_style = Style::new().cyan().bold();
+    let path = file
+        .path
+        .if_supports_color(Stream::Stdout, |s| s.style(path_style));
+    let ss = score_style(file.score);
+    let score_text = format!("({:.2})", file.score);
+    let score_display = score_text.if_supports_color(Stream::Stdout, |s| s.style(ss));
+    writeln!(out, "{path} {score_display}",).unwrap();
     writeln!(
         out,
-        "{BOLD}{CYAN}{path}{RESET} {DIM}({score:.2}){RESET}",
-        path = file.path,
-        score = file.score,
+        "  {}",
+        file.summary
+            .if_supports_color(Stream::Stdout, |s| s.dimmed())
     )
     .unwrap();
-    writeln!(out, "  {}", file.summary).unwrap();
 
     let count = file.symbols.len();
     for (i, sym) in file.symbols.iter().enumerate() {
         let is_last = i == count - 1;
-        let branch = if is_last { "└─" } else { "├─" };
-        let cont = if is_last { "   " } else { "│  " };
-
-        writeln!(
-            out,
-            "  {DIM}{branch}{RESET} {BOLD}{name}{RESET} {DIM}({kind}, L{start}-{end}) — {score:.2}{RESET}",
-            name = sym.name,
-            kind = sym.kind,
-            start = sym.lines[0],
-            end = sym.lines[1],
-            score = sym.score,
-        )
-        .unwrap();
-        writeln!(out, "  {cont}{}", sym.summary).unwrap();
+        render_symbol(out, sym, is_last);
     }
 }
 
-// ANSI escape sequences — kept as constants rather than pulling in a crate.
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const CYAN: &str = "\x1b[36m";
-const RESET: &str = "\x1b[0m";
+fn render_symbol(out: &mut String, sym: &SymbolResult, is_last: bool) {
+    let branch = if is_last { "└─" } else { "├─" };
+    let cont = if is_last { "   " } else { "│  " };
+
+    let branch_display = branch.if_supports_color(Stream::Stdout, |s| s.dimmed());
+    let name_display = sym.name.if_supports_color(Stream::Stdout, |s| s.bold());
+
+    let ks = kind_style(&sym.kind);
+    let kind_display = sym.kind.if_supports_color(Stream::Stdout, |s| s.style(ks));
+    let line_range = format!("L{}-{}", sym.lines[0], sym.lines[1]);
+    let line_display = line_range.if_supports_color(Stream::Stdout, |s| s.dimmed());
+
+    let ss = score_style(sym.score);
+    let score_text = format!("— {:.2}", sym.score);
+    let score_display = score_text.if_supports_color(Stream::Stdout, |s| s.style(ss));
+
+    writeln!(
+        out,
+        "  {branch_display} {name_display} ({kind_display}, {line_display}) {score_display}",
+    )
+    .unwrap();
+    writeln!(out, "  {cont}{}", sym.summary).unwrap();
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::SymbolResult;
 
     fn sample_report() -> SearchReport {
         SearchReport {
@@ -169,7 +212,6 @@ mod tests {
     fn pretty_uses_tree_characters() {
         let report = sample_report();
         let out = render_pretty(&report);
-        // Commission file has 2 symbols: first gets ├─, last gets └─
         assert!(out.contains("├─"));
         assert!(out.contains("└─"));
     }

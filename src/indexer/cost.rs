@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use owo_colors::{OwoColorize, Stream, Style};
 
 use super::walk;
 use crate::chunk::{Chunker, detect_language};
@@ -152,31 +153,56 @@ impl DryRunReport {
 
     pub fn display(&self, summarizer_model: &str, embed_model: &str) {
         println!("Dry run report:");
-        println!("  Files:              {}", self.files_total);
-        println!("  Files with symbols: {}", self.files_with_symbols);
-        println!("  Total symbols:      {}", self.total_symbols);
+        println!(
+            "  Files:              {}",
+            self.files_total
+                .if_supports_color(Stream::Stdout, |s| s.cyan())
+        );
+        println!(
+            "  Files with symbols: {}",
+            self.files_with_symbols
+                .if_supports_color(Stream::Stdout, |s| s.cyan())
+        );
+        println!(
+            "  Total symbols:      {}",
+            self.total_symbols
+                .if_supports_color(Stream::Stdout, |s| s.cyan())
+        );
         println!(
             "  Total chunks:       {} (file + symbol)",
             self.total_file_chunks
+                .if_supports_color(Stream::Stdout, |s| s.cyan())
         );
-        println!("  Estimated vectors:  {}", self.estimated_vectors);
+        println!(
+            "  Estimated vectors:  {}",
+            self.estimated_vectors
+                .if_supports_color(Stream::Stdout, |s| s.cyan())
+        );
         println!();
         println!("  Summarizer ({summarizer_model}):");
+        let input_tok = format_tokens(self.estimated_summarizer_input_tokens);
+        let output_tok = format_tokens(self.estimated_summarizer_output_tokens);
         println!(
             "    Input tokens:  ~{}",
-            format_tokens(self.estimated_summarizer_input_tokens)
+            input_tok.if_supports_color(Stream::Stdout, |s| s.yellow())
         );
         println!(
             "    Output tokens: ~{}",
-            format_tokens(self.estimated_summarizer_output_tokens)
+            output_tok.if_supports_color(Stream::Stdout, |s| s.yellow())
         );
         println!("  Embedder ({embed_model}):");
+        let embed_tok = format_tokens(self.estimated_embed_tokens);
         println!(
             "    Tokens: ~{}",
-            format_tokens(self.estimated_embed_tokens)
+            embed_tok.if_supports_color(Stream::Stdout, |s| s.yellow())
         );
         println!();
-        println!("  Estimated cost: ${:.4}", self.estimated_cost_usd);
+        let cost = format!("${:.4}", self.estimated_cost_usd);
+        let cost_style = Style::new().green().bold();
+        println!(
+            "  Estimated cost: {}",
+            cost.if_supports_color(Stream::Stdout, |s| s.style(cost_style))
+        );
     }
 }
 

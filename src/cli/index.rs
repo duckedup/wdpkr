@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use clap::Args;
 
+use owo_colors::{OwoColorize, Stream};
+
 use crate::chunk::tree_sitter::TreeSitterChunker;
 use crate::config::Config;
 use crate::embed::build_embedder;
@@ -56,9 +58,11 @@ pub async fn run(args: IndexArgs) -> Result<()> {
 
     eprintln!(
         "Indexing into namespace '{}' with {}/{}...",
-        namespace.as_str(),
+        namespace
+            .as_str()
+            .if_supports_color(Stream::Stderr, |s| s.cyan()),
         embedder.provider_name(),
-        embedder.model_name()
+        embedder.model_name(),
     );
 
     let root = std::env::current_dir()?;
@@ -72,17 +76,31 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     );
     let report = index_run.run(args.full, &root).await?;
 
+    let elapsed = format!("{:.1}s", report.elapsed.as_secs_f64());
     eprintln!(
-        "\nDone in {:.1}s: {} processed, {} skipped (unchanged), {} failed, {} vectors upserted, {} deleted",
-        report.elapsed.as_secs_f64(),
-        report.files_processed,
-        report.files_skipped,
-        report.files_failed,
-        report.vectors_upserted,
-        report.vectors_deleted
+        "\nDone in {}: {} processed, {} skipped (unchanged), {} failed, {} vectors upserted, {} deleted",
+        elapsed.if_supports_color(Stream::Stderr, |s| s.cyan()),
+        report
+            .files_processed
+            .if_supports_color(Stream::Stderr, |s| s.green()),
+        report
+            .files_skipped
+            .if_supports_color(Stream::Stderr, |s| s.yellow()),
+        report
+            .files_failed
+            .if_supports_color(Stream::Stderr, |s| s.red()),
+        report
+            .vectors_upserted
+            .if_supports_color(Stream::Stderr, |s| s.green()),
+        report
+            .vectors_deleted
+            .if_supports_color(Stream::Stderr, |s| s.yellow()),
     );
     if let Some(ref sha) = report.hwm_advanced_to {
-        eprintln!("HWM advanced to {sha}");
+        eprintln!(
+            "HWM advanced to {}",
+            sha.if_supports_color(Stream::Stderr, |s| s.dimmed())
+        );
     }
 
     Ok(())
