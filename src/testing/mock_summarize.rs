@@ -50,6 +50,7 @@ mod tests {
     use super::*;
     use crate::chunk::Import;
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn file_summary_is_deterministic() {
         let s = MockSummarizer::new();
@@ -70,6 +71,7 @@ mod tests {
         assert!(a.contains("1 imports"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn symbol_summary_includes_context() {
         let s = MockSummarizer::new();

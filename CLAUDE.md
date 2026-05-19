@@ -56,6 +56,7 @@ bd close <id>         # Complete work
 just test          # run all tests (~300)
 just ci            # fmt-check + clippy (-D warnings) + test
 just lint          # clippy only
+just miri          # undefined behavior check via Miri (requires nightly)
 just fmt           # format code
 just build         # debug build
 just release       # optimized release build
@@ -63,6 +64,20 @@ just run <args>    # run from source (e.g. `just run search "query"`)
 ```
 
 Rust 1.95+ required (pinned via `rust-toolchain.toml`). Edition 2024.
+
+### Miri (Undefined Behavior Checker)
+
+`just miri` runs the test suite under [Miri](https://github.com/rust-lang/miri/) to detect undefined behavior, memory leaks, and pointer provenance issues. Miri interprets MIR (Rust's mid-level IR) and cannot execute FFI calls.
+
+**When to add `#[cfg_attr(miri, ignore)]`** to a test:
+- Uses `#[tokio::test]` — tokio's runtime requires kqueue/epoll (OS-level FFI)
+- Calls tree-sitter (`Parser::new()`, `TreeSitterChunker`) — C library FFI
+- Spawns processes (`Command::new()`) — requires `fork()` syscall
+- Creates reqwest `Client` directly (not via mocks) — system TLS FFI
+
+**Do NOT ignore** tests that use mock implementations (`MockEmbedder`, `MockVectorStore`, `MockSummarizer`) — these are pure Rust and should run under Miri.
+
+Miri runs in CI as a separate job. If nightly breaks Miri temporarily, the CI job will fail but won't block the main `check` job.
 
 ## Architecture Overview
 

@@ -86,6 +86,7 @@ pub fn derive_namespace(remote_url: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn current_sha_returns_hex() {
         let sha = current_sha(Path::new(".")).unwrap();

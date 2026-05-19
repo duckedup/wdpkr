@@ -35,6 +35,10 @@ test:
 test-mod MOD:
     cargo test --all-features {{ MOD }}
 
+# Run Miri to check for undefined behavior (requires nightly)
+miri:
+    MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks" cargo +nightly miri test
+
 # Pre-commit / pre-PR checks: format clean, no clippy warnings, tests green
 ci: fmt-check lint test
 
