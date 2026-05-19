@@ -172,6 +172,7 @@ mod tests {
                 doc_comment: None,
                 start_line: 1,
                 end_line: 1,
+                references: vec![],
             },
             SymbolChunk {
                 name: "validate".into(),
@@ -181,6 +182,7 @@ mod tests {
                 doc_comment: None,
                 start_line: 3,
                 end_line: 3,
+                references: vec![],
             },
         ]
     }

@@ -12,6 +12,7 @@ pub struct LanguageConfig {
     pub container_types: &'static [&'static str],
     pub comment_types: &'static [&'static str],
     pub import_types: &'static [&'static str],
+    pub call_expression_types: &'static [&'static str],
 }
 
 pub fn get_config(language: &str) -> Option<LanguageConfig> {
@@ -46,6 +47,7 @@ fn rust() -> LanguageConfig {
         container_types: &["impl_item"],
         comment_types: &["line_comment", "block_comment"],
         import_types: &["use_declaration"],
+        call_expression_types: &["call_expression", "macro_invocation"],
     }
 }
 
@@ -62,6 +64,7 @@ fn go() -> LanguageConfig {
         container_types: &[],
         comment_types: &["comment"],
         import_types: &["import_declaration"],
+        call_expression_types: &["call_expression"],
     }
 }
 
@@ -80,6 +83,7 @@ fn typescript() -> LanguageConfig {
         container_types: &["class_declaration"],
         comment_types: &["comment"],
         import_types: &["import_statement"],
+        call_expression_types: &["call_expression", "new_expression"],
     }
 }
 
@@ -98,6 +102,7 @@ fn tsx() -> LanguageConfig {
         container_types: &["class_declaration"],
         comment_types: &["comment"],
         import_types: &["import_statement"],
+        call_expression_types: &["call_expression", "new_expression"],
     }
 }
 
@@ -114,6 +119,7 @@ fn javascript() -> LanguageConfig {
         container_types: &["class_declaration"],
         comment_types: &["comment"],
         import_types: &["import_statement"],
+        call_expression_types: &["call_expression", "new_expression"],
     }
 }
 
@@ -128,6 +134,7 @@ fn python() -> LanguageConfig {
         container_types: &["class_definition"],
         comment_types: &["comment"],
         import_types: &["import_statement", "import_from_statement"],
+        call_expression_types: &["call"],
     }
 }
 
@@ -148,6 +155,7 @@ fn java() -> LanguageConfig {
         ],
         comment_types: &["line_comment", "block_comment"],
         import_types: &["import_declaration"],
+        call_expression_types: &["method_invocation", "object_creation_expression"],
     }
 }
 
@@ -169,6 +177,7 @@ fn cpp() -> LanguageConfig {
         ],
         comment_types: &["comment"],
         import_types: &["preproc_include"],
+        call_expression_types: &["call_expression"],
     }
 }
 
@@ -190,6 +199,7 @@ fn csharp() -> LanguageConfig {
         ],
         comment_types: &["comment"],
         import_types: &["using_directive"],
+        call_expression_types: &["invocation_expression", "object_creation_expression"],
     }
 }
 

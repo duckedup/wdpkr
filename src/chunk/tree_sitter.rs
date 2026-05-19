@@ -5,6 +5,8 @@
 //! extraction, container recursion (one level for methods inside impl
 //! blocks / classes), and graceful fallback on parse failure.
 
+use std::collections::HashSet;
+
 use tree_sitter::{Node, Parser};
 
 use super::languages::{self, LanguageConfig};
@@ -154,6 +156,8 @@ fn extract_symbol(node: &Node, source: &str, config: &LanguageConfig) -> Option<
         .and_then(|sib| sib.utf8_text(src).ok())
         .map(|s| s.to_string());
 
+    let references = extract_references(node, source, config);
+
     let display_name = if name.is_empty() {
         body.lines()
             .next()
@@ -174,6 +178,7 @@ fn extract_symbol(node: &Node, source: &str, config: &LanguageConfig) -> Option<
         doc_comment,
         start_line,
         end_line,
+        references,
     })
 }
 
@@ -201,6 +206,43 @@ fn extract_import(node: &Node, source: &str) -> Option<Import> {
         module: text,
         names: vec![],
     })
+}
+
+fn extract_references(node: &Node, source: &str, config: &LanguageConfig) -> Vec<String> {
+    let mut refs = Vec::new();
+    collect_calls(node, source, config, &mut refs);
+    let mut seen = HashSet::new();
+    refs.retain(|r| seen.insert(r.clone()));
+    refs
+}
+
+fn collect_calls(node: &Node, source: &str, config: &LanguageConfig, refs: &mut Vec<String>) {
+    if config.call_expression_types.contains(&node.kind())
+        && let Some(name) = extract_callee_name(node, source)
+        && !name.is_empty()
+    {
+        refs.push(name);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_calls(&child, source, config, refs);
+    }
+}
+
+fn extract_callee_name(call_node: &Node, source: &str) -> Option<String> {
+    let callee = call_node
+        .child_by_field_name("function")
+        .or_else(|| call_node.child_by_field_name("name"))
+        .or_else(|| call_node.child_by_field_name("macro"))
+        .or_else(|| call_node.child_by_field_name("constructor"))
+        .or_else(|| call_node.child_by_field_name("type"))?;
+    let text = callee.utf8_text(source.as_bytes()).ok()?;
+    Some(last_identifier_segment(text).to_string())
+}
+
+fn last_identifier_segment(text: &str) -> &str {
+    let after_scope = text.rsplit("::").next().unwrap_or(text);
+    after_scope.rsplit('.').next().unwrap_or(after_scope).trim()
 }
 
 fn normalize_kind(node_type: &str) -> &str {
@@ -649,5 +691,263 @@ public class Calculator {
         let src = "fn broken( {{{{{ this is not valid rust";
         let chunks = chunk(src, "rust");
         assert_eq!(chunks.file_content, src);
+    }
+
+    // ── Reference extraction ─────────────────────────────────────────
+
+    #[test]
+    fn rust_extracts_call_references() {
+        let src = r#"
+fn orchestrate() {
+    let x = validate_input();
+    let y = process_data(x);
+    emit_result(y);
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let sym = &chunks.symbols[0];
+        assert!(
+            sym.references.contains(&"validate_input".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"process_data".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"emit_result".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn rust_extracts_method_call_references() {
+        let src = r#"
+fn work(svc: &Service) {
+    svc.run();
+    svc.cleanup();
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let sym = &chunks.symbols[0];
+        assert!(
+            sym.references.contains(&"run".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"cleanup".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn rust_extracts_scoped_call_references() {
+        let src = r#"
+fn create() {
+    let map = HashMap::new();
+    let config = Config::from_env();
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let sym = &chunks.symbols[0];
+        assert!(
+            sym.references.contains(&"new".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"from_env".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn rust_extracts_macro_references() {
+        let src = r#"
+fn log_stuff() {
+    println!("hello");
+    vec![1, 2, 3];
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let sym = &chunks.symbols[0];
+        assert!(
+            sym.references.contains(&"println".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"vec".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn rust_deduplicates_references() {
+        let src = r#"
+fn repeated() {
+    foo();
+    foo();
+    foo();
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let sym = &chunks.symbols[0];
+        assert_eq!(
+            sym.references.iter().filter(|r| *r == "foo").count(),
+            1,
+            "should deduplicate: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn rust_no_calls_means_empty_references() {
+        let src = r#"
+fn pure(x: i32) -> i32 {
+    x + 1
+}
+"#;
+        let chunks = chunk(src, "rust");
+        let sym = &chunks.symbols[0];
+        assert!(sym.references.is_empty(), "refs: {:?}", sym.references);
+    }
+
+    #[test]
+    fn go_extracts_call_references() {
+        let src = r#"
+package main
+
+func handler(w http.ResponseWriter, r *http.Request) {
+    data := parseRequest(r)
+    result := processData(data)
+    writeResponse(w, result)
+}
+"#;
+        let chunks = chunk(src, "go");
+        let sym = chunks.symbols.iter().find(|s| s.name == "handler").unwrap();
+        assert!(
+            sym.references.contains(&"parseRequest".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"processData".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"writeResponse".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn python_extracts_call_references() {
+        let src = r#"
+def orchestrate():
+    data = fetch_data()
+    result = transform(data)
+    save_result(result)
+"#;
+        let chunks = chunk(src, "python");
+        let sym = &chunks.symbols[0];
+        assert!(
+            sym.references.contains(&"fetch_data".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"transform".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"save_result".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn typescript_extracts_call_references() {
+        let src = r#"
+function handleRequest(req: Request): Response {
+    const data = parseBody(req);
+    const result = validate(data);
+    return formatResponse(result);
+}
+"#;
+        let chunks = chunk(src, "typescript");
+        let sym = chunks
+            .symbols
+            .iter()
+            .find(|s| s.name == "handleRequest")
+            .unwrap();
+        assert!(
+            sym.references.contains(&"parseBody".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"validate".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"formatResponse".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn java_extracts_method_invocation_references() {
+        let src = r#"
+public class Service {
+    public void handle() {
+        Data data = parser.parse();
+        Result result = processor.transform(data);
+        emitter.emit(result);
+    }
+}
+"#;
+        let chunks = chunk(src, "java");
+        let sym = chunks.symbols.iter().find(|s| s.name == "handle").unwrap();
+        assert!(
+            sym.references.contains(&"parse".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"transform".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+        assert!(
+            sym.references.contains(&"emit".to_string()),
+            "refs: {:?}",
+            sym.references
+        );
+    }
+
+    #[test]
+    fn last_identifier_segment_splits_correctly() {
+        assert_eq!(last_identifier_segment("foo"), "foo");
+        assert_eq!(last_identifier_segment("self.foo"), "foo");
+        assert_eq!(last_identifier_segment("a.b.c"), "c");
+        assert_eq!(last_identifier_segment("HashMap::new"), "new");
+        assert_eq!(
+            last_identifier_segment("std::collections::HashMap::new"),
+            "new"
+        );
     }
 }
