@@ -16,7 +16,7 @@ use tokio::sync::Semaphore;
 
 use crate::chunk::Chunker;
 use crate::embed::{Embedder, embedder_identity};
-use crate::store::{Namespace, NamespaceMetadata, VectorStore};
+use crate::store::{ChunkKind, Namespace, NamespaceMetadata, VectorDocument, VectorStore};
 use crate::summarize::Summarizer;
 
 pub struct IndexRun {
@@ -166,20 +166,36 @@ impl IndexRun {
         let mut processed = 0usize;
         let mut failed = 0usize;
         let mut skipped = 0usize;
-        let mut upserted = 0usize;
+        let mut all_documents: Vec<VectorDocument> = Vec::new();
 
         while let Some(join_result) = join_set.join_next().await {
             let result = join_result?;
             match result.outcome {
-                FileOutcome::Processed { vectors } => {
+                FileOutcome::Processed { documents } => {
                     processed += 1;
-                    upserted += vectors;
+                    all_documents.extend(documents);
                 }
                 FileOutcome::Skipped => {
                     skipped += 1;
                 }
                 FileOutcome::Failed => {
                     failed += 1;
+                }
+            }
+        }
+
+        resolve_call_edges(&mut all_documents);
+
+        let mut upserted = 0usize;
+        for chunk in all_documents.chunks(200) {
+            match self.store.upsert(&self.namespace, chunk).await {
+                Ok(stats) => upserted += stats.upserted,
+                Err(e) => {
+                    eprintln!(
+                        "  {} {}",
+                        "batch upsert error:".if_supports_color(Stream::Stderr, |s| s.red()),
+                        e,
+                    );
                 }
             }
         }
@@ -208,7 +224,7 @@ struct FileResult {
 }
 
 enum FileOutcome {
-    Processed { vectors: usize },
+    Processed { documents: Vec<VectorDocument> },
     Skipped,
     Failed,
 }
@@ -282,8 +298,6 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
                 "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
                 timing.if_supports_color(Stream::Stderr, |s| s.yellow()),
             );
-            // Delete existing vectors for this file before upserting so that
-            // symbols removed since the last index don't linger as stale results.
             if let Err(e) = store.delete_by_file(namespace, rel_path).await {
                 eprintln!(
                     "  [{}] {rel_path} {} {}",
@@ -296,23 +310,10 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
                     outcome: FileOutcome::Failed,
                 };
             }
-            match store.upsert(namespace, &result.documents).await {
-                Ok(stats) => FileResult {
-                    outcome: FileOutcome::Processed {
-                        vectors: stats.upserted,
-                    },
+            FileResult {
+                outcome: FileOutcome::Processed {
+                    documents: result.documents,
                 },
-                Err(e) => {
-                    eprintln!(
-                        "  [{}] {rel_path} {} {}",
-                        idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
-                        "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
-                        format!("upsert error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
-                    );
-                    FileResult {
-                        outcome: FileOutcome::Failed,
-                    }
-                }
             }
         }
         Err(e) => {
@@ -329,6 +330,67 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
     }
 }
 
+fn resolve_call_edges(documents: &mut [VectorDocument]) {
+    use std::collections::HashMap;
+
+    // Phase 1: build owned symbol table and called_by map
+    let mut symbol_table: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for doc in documents.iter() {
+        if doc.chunk_kind == ChunkKind::Symbol
+            && let Some(ref name) = doc.symbol_name
+        {
+            symbol_table
+                .entry(name.clone())
+                .or_default()
+                .push((doc.file_path.clone(), doc.id.clone()));
+        }
+    }
+
+    let mut called_by_map: HashMap<String, Vec<String>> = HashMap::new();
+    for doc in documents.iter() {
+        if doc.chunk_kind != ChunkKind::Symbol {
+            continue;
+        }
+        if let Some(ref calls) = doc.calls {
+            let caller_name = doc.symbol_name.as_deref().unwrap_or("?");
+            let caller_ref = format!("{}:{}", doc.file_path, caller_name);
+            for call_name in calls {
+                if let Some(targets) = symbol_table.get(call_name) {
+                    for (_, target_id) in targets {
+                        called_by_map
+                            .entry(target_id.clone())
+                            .or_default()
+                            .push(caller_ref.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 2: apply resolved edges
+    for doc in documents.iter_mut() {
+        if doc.chunk_kind != ChunkKind::Symbol {
+            continue;
+        }
+
+        if let Some(ref raw_calls) = doc.calls {
+            let resolved: Vec<String> = raw_calls
+                .iter()
+                .flat_map(|name| {
+                    symbol_table
+                        .get(name)
+                        .into_iter()
+                        .flatten()
+                        .map(move |(file, _)| format!("{file}:{name}"))
+                })
+                .collect();
+            doc.calls = Some(resolved);
+        }
+
+        doc.called_by = Some(called_by_map.remove(&doc.id).unwrap_or_default());
+    }
+}
+
 pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
     let ns = &config.indexer.namespace;
     if ns.is_empty() {
@@ -336,5 +398,116 @@ pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
         Ok(Namespace::from(git::derive_namespace(&remote)))
     } else {
         Ok(Namespace::from(ns.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sym_doc(id: &str, file: &str, name: &str, calls: Vec<&str>) -> VectorDocument {
+        VectorDocument {
+            id: id.into(),
+            vector: vec![0.0; 3],
+            summary: String::new(),
+            file_path: file.into(),
+            chunk_kind: ChunkKind::Symbol,
+            symbol_name: Some(name.into()),
+            symbol_kind: Some("function".into()),
+            start_line: Some(1),
+            end_line: Some(10),
+            language: Some("rust".into()),
+            content_hash: None,
+            calls: Some(calls.into_iter().map(String::from).collect()),
+            called_by: None,
+        }
+    }
+
+    #[test]
+    fn resolve_populates_calls_and_called_by() {
+        let mut docs = vec![
+            sym_doc("s1", "src/a.rs", "orchestrate", vec!["validate", "process"]),
+            sym_doc("s2", "src/b.rs", "validate", vec![]),
+            sym_doc("s3", "src/b.rs", "process", vec!["validate"]),
+        ];
+
+        resolve_call_edges(&mut docs);
+
+        let orchestrate = &docs[0];
+        let calls = orchestrate.calls.as_ref().unwrap();
+        assert!(
+            calls.contains(&"src/b.rs:validate".to_string()),
+            "calls: {calls:?}"
+        );
+        assert!(
+            calls.contains(&"src/b.rs:process".to_string()),
+            "calls: {calls:?}"
+        );
+
+        let validate = &docs[1];
+        let called_by = validate.called_by.as_ref().unwrap();
+        assert!(
+            called_by.contains(&"src/a.rs:orchestrate".to_string()),
+            "called_by: {called_by:?}"
+        );
+        assert!(
+            called_by.contains(&"src/b.rs:process".to_string()),
+            "called_by: {called_by:?}"
+        );
+
+        let process = &docs[2];
+        let called_by = process.called_by.as_ref().unwrap();
+        assert!(
+            called_by.contains(&"src/a.rs:orchestrate".to_string()),
+            "called_by: {called_by:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_drops_unresolved_calls() {
+        let mut docs = vec![sym_doc(
+            "s1",
+            "src/a.rs",
+            "main",
+            vec!["println", "nonexistent"],
+        )];
+
+        resolve_call_edges(&mut docs);
+
+        let calls = docs[0].calls.as_ref().unwrap();
+        assert!(calls.is_empty(), "unresolved should be dropped: {calls:?}");
+    }
+
+    #[test]
+    fn resolve_sets_empty_called_by_for_leaf_symbols() {
+        let mut docs = vec![sym_doc("s1", "src/a.rs", "leaf", vec![])];
+
+        resolve_call_edges(&mut docs);
+
+        assert_eq!(docs[0].called_by, Some(vec![]));
+    }
+
+    #[test]
+    fn resolve_skips_file_level_documents() {
+        let mut docs = vec![VectorDocument {
+            id: "f1".into(),
+            vector: vec![0.0; 3],
+            summary: String::new(),
+            file_path: "src/a.rs".into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: Some("rust".into()),
+            content_hash: None,
+            calls: None,
+            called_by: None,
+        }];
+
+        resolve_call_edges(&mut docs);
+
+        assert!(docs[0].calls.is_none());
+        assert!(docs[0].called_by.is_none());
     }
 }
