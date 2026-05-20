@@ -284,6 +284,26 @@ impl VectorStore for TurbopufferStore {
         Ok(hashes)
     }
 
+    async fn list_documents(&self, ns: &Namespace) -> Result<Vec<VectorDocument>> {
+        let url = format!("{}/query", self.ns_url(ns));
+        let body = QueryRequest {
+            filters: Some(serde_json::json!(["id", "NotEq", META_VECTOR_ID])),
+            include_attributes: Some(serde_json::json!(true)),
+            include_vectors: Some(true),
+            limit: Some(10_000),
+            ..Default::default()
+        };
+
+        let resp = self.post_json(&url, &body).await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            bail!("list_documents failed: {err}");
+        }
+
+        let query_resp: QueryResponse = resp.json().await.context("parsing list response")?;
+        query_resp.rows.into_iter().map(row_to_document).collect()
+    }
+
     async fn search(
         &self,
         ns: &Namespace,
@@ -320,12 +340,23 @@ fn build_search_filters(opts: &SearchOptions) -> Option<serde_json::Value> {
     let mut conditions: Vec<serde_json::Value> = Vec::new();
     conditions.push(serde_json::json!(["id", "NotEq", META_VECTOR_ID]));
 
-    if let Some(ref prefix) = opts.path_prefix {
-        conditions.push(serde_json::json!([
-            "file_path",
-            "Glob",
-            format!("{prefix}*")
-        ]));
+    match opts.path_prefixes.len() {
+        0 => {}
+        1 => {
+            conditions.push(serde_json::json!([
+                "file_path",
+                "Glob",
+                format!("{}*", opts.path_prefixes[0])
+            ]));
+        }
+        _ => {
+            let prefix_conditions: Vec<_> = opts
+                .path_prefixes
+                .iter()
+                .map(|p| serde_json::json!(["file_path", "Glob", format!("{p}*")]))
+                .collect();
+            conditions.push(serde_json::json!(["Or", prefix_conditions]));
+        }
     }
     if let Some(ref kind) = opts.chunk_kind {
         conditions.push(serde_json::json!(["chunk_kind", "Eq", kind.to_string()]));
@@ -396,6 +427,12 @@ fn doc_to_row(doc: &VectorDocument) -> HashMap<String, serde_json::Value> {
     if let Some(ref hash) = doc.content_hash {
         row.insert("content_hash".into(), serde_json::json!(hash));
     }
+    if let Some(ref calls) = doc.calls {
+        row.insert("calls".into(), serde_json::json!(calls));
+    }
+    if let Some(ref called_by) = doc.called_by {
+        row.insert("called_by".into(), serde_json::json!(called_by));
+    }
     row
 }
 
@@ -442,6 +479,55 @@ fn row_to_metadata(row: &HashMap<String, serde_json::Value>) -> Result<Namespace
     })
 }
 
+fn row_to_document(row: HashMap<String, serde_json::Value>) -> Result<VectorDocument> {
+    let get_str = |key: &str| -> Option<String> {
+        row.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+    };
+    let get_u32 =
+        |key: &str| -> Option<u32> { row.get(key).and_then(|v| v.as_u64()).map(|n| n as u32) };
+    let get_string_vec = |key: &str| -> Option<Vec<String>> {
+        row.get(key).and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+        })
+    };
+
+    let vector: Vec<f32> = row
+        .get("vector")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let chunk_kind_str = get_str("chunk_kind").unwrap_or_else(|| "file".into());
+    let chunk_kind = match chunk_kind_str.as_str() {
+        "symbol" => ChunkKind::Symbol,
+        _ => ChunkKind::File,
+    };
+
+    Ok(VectorDocument {
+        id: get_str("id").unwrap_or_default(),
+        vector,
+        summary: get_str("summary").unwrap_or_default(),
+        file_path: get_str("file_path").unwrap_or_default(),
+        chunk_kind,
+        symbol_name: get_str("symbol_name"),
+        symbol_kind: get_str("symbol_kind"),
+        start_line: get_u32("start_line"),
+        end_line: get_u32("end_line"),
+        language: get_str("language"),
+        content_hash: get_str("content_hash"),
+        calls: get_string_vec("calls"),
+        called_by: get_string_vec("called_by"),
+    })
+}
+
 fn row_to_search_result(
     row: HashMap<String, serde_json::Value>,
     score: f32,
@@ -451,6 +537,15 @@ fn row_to_search_result(
     };
     let get_u32 =
         |key: &str| -> Option<u32> { row.get(key).and_then(|v| v.as_u64()).map(|n| n as u32) };
+    let get_string_vec = |key: &str| -> Option<Vec<String>> {
+        row.get(key).and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+        })
+    };
 
     let chunk_kind_str = get_str("chunk_kind").unwrap_or_else(|| "file".into());
     let chunk_kind = match chunk_kind_str.as_str() {
@@ -469,6 +564,8 @@ fn row_to_search_result(
         start_line: get_u32("start_line"),
         end_line: get_u32("end_line"),
         language: get_str("language"),
+        calls: get_string_vec("calls"),
+        called_by: get_string_vec("called_by"),
     })
 }
 
@@ -591,6 +688,8 @@ mod tests {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["id"], "test-1");
@@ -616,6 +715,8 @@ mod tests {
             end_line: Some(25),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["symbol_name"], "process");
@@ -638,6 +739,8 @@ mod tests {
             end_line: None,
             language: None,
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let body = WriteRequest {
             upsert_rows: Some(vec![doc_to_row(&doc)]),
@@ -871,19 +974,36 @@ mod tests {
     }
 
     #[test]
-    fn filters_path_prefix_uses_glob() {
+    fn filters_single_prefix_uses_glob() {
         let opts = SearchOptions {
-            path_prefix: Some("src/finance/".into()),
+            path_prefixes: vec!["src/finance/".into()],
             ..Default::default()
         };
         let filters = build_search_filters(&opts).unwrap();
         assert_eq!(filters[0], "And");
         let inner = filters[1].as_array().unwrap();
         assert_eq!(inner.len(), 2);
-        // Second condition is the Glob filter
         assert_eq!(inner[1][0], "file_path");
         assert_eq!(inner[1][1], "Glob");
         assert_eq!(inner[1][2], "src/finance/*");
+    }
+
+    #[test]
+    fn filters_multiple_prefixes_uses_or() {
+        let opts = SearchOptions {
+            path_prefixes: vec!["src/finance/".into(), "src/annuity/".into()],
+            ..Default::default()
+        };
+        let filters = build_search_filters(&opts).unwrap();
+        assert_eq!(filters[0], "And");
+        let inner = filters[1].as_array().unwrap();
+        assert_eq!(inner.len(), 2);
+        let or_cond = &inner[1];
+        assert_eq!(or_cond[0], "Or");
+        let or_inner = or_cond[1].as_array().unwrap();
+        assert_eq!(or_inner.len(), 2);
+        assert_eq!(or_inner[0][2], "src/finance/*");
+        assert_eq!(or_inner[1][2], "src/annuity/*");
     }
 
     #[test]
@@ -917,7 +1037,7 @@ mod tests {
     #[test]
     fn filters_all_options_produces_four_conditions() {
         let opts = SearchOptions {
-            path_prefix: Some("src/".into()),
+            path_prefixes: vec!["src/".into()],
             chunk_kind: Some(ChunkKind::File),
             language: Some("python".into()),
             ..Default::default()
@@ -1123,6 +1243,8 @@ mod tests {
             end_line: Some(200),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 10); // id, vector, summary, file_path, chunk_kind + 5 optional
@@ -1149,6 +1271,8 @@ mod tests {
             end_line: None,
             language: None,
             content_hash: None,
+            calls: None,
+            called_by: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 5); // id, vector, summary, file_path, chunk_kind

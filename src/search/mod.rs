@@ -10,7 +10,7 @@ pub mod output;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::embed::{Embedder, embedder_identity};
@@ -23,7 +23,8 @@ pub struct SearchParams {
     pub top_k: usize,
     pub symbols_per_file: usize,
     pub no_symbols: bool,
-    pub scope: Option<String>,
+    pub scope: Vec<String>,
+    pub filters: Vec<String>,
 }
 
 // ── Output (serializable to the SPEC's JSON shape) ────────────────────────
@@ -96,10 +97,28 @@ impl SearchRun {
             }
         }
 
-        // 3. Embed the query
+        // 3. Compile glob filters (fail fast before any API calls)
+        let glob_set = if params.filters.is_empty() {
+            None
+        } else {
+            let mut builder = globset::GlobSetBuilder::new();
+            for pattern in &params.filters {
+                builder.add(
+                    globset::Glob::new(pattern)
+                        .with_context(|| format!("invalid --filter glob: {pattern}"))?,
+                );
+            }
+            Some(
+                builder
+                    .build()
+                    .context("failed to compile --filter globs")?,
+            )
+        };
+
+        // 4. Embed the query
         let query_vector = self.embedder.embed(&params.query).await?;
 
-        // 4. Over-fetch from the store so we have both file-level and
+        // 5. Over-fetch from the store so we have both file-level and
         //    symbol-level results to group. Factor of 3 is the starting
         //    heuristic per SPEC; tunable via eval.
         let over_fetch = params.top_k * (params.symbols_per_file + 1) * 3;
@@ -110,14 +129,14 @@ impl SearchRun {
                 &query_vector,
                 &SearchOptions {
                     top_k: over_fetch,
-                    path_prefix: params.scope.clone(),
+                    path_prefixes: params.scope.clone(),
                     ..Default::default()
                 },
             )
             .await?;
 
-        // 5. Group into file → symbols tiered structure
-        let results = group_results(&all_results, params);
+        // 6. Group into file → symbols tiered structure
+        let results = group_results(&all_results, params, glob_set.as_ref());
 
         Ok(SearchReport {
             query: params.query.clone(),
@@ -134,7 +153,11 @@ impl SearchRun {
 /// 2. Take the top `top_k` files (already score-sorted from the store).
 /// 3. For each file, attach the top `symbols_per_file` symbol results
 ///    that share the same `file_path`.
-fn group_results(results: &[SearchResult], params: &SearchParams) -> Vec<FileResult> {
+fn group_results(
+    results: &[SearchResult],
+    params: &SearchParams,
+    glob_set: Option<&globset::GlobSet>,
+) -> Vec<FileResult> {
     let mut file_results: Vec<&SearchResult> = Vec::new();
     let mut symbols_by_file: HashMap<&str, Vec<&SearchResult>> = HashMap::new();
 
@@ -148,6 +171,10 @@ fn group_results(results: &[SearchResult], params: &SearchParams) -> Vec<FileRes
                     .push(r);
             }
         }
+    }
+
+    if let Some(gs) = glob_set {
+        file_results.retain(|r| gs.is_match(&r.file_path));
     }
 
     // Files arrive sorted by score from the store; truncate to top_k.
@@ -216,6 +243,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-release".into(),
@@ -229,6 +258,8 @@ mod tests {
                 end_line: Some(78),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-correct".into(),
@@ -242,6 +273,8 @@ mod tests {
                 end_line: Some(95),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             // Auth module — close to [0,1,0]
             VectorDocument {
@@ -256,6 +289,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-authenticate".into(),
@@ -269,6 +304,8 @@ mod tests {
                 end_line: Some(30),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             // API module — close to [0,0,1]
             VectorDocument {
@@ -283,6 +320,8 @@ mod tests {
                 end_line: None,
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
             VectorDocument {
                 id: "s-handle".into(),
@@ -296,6 +335,8 @@ mod tests {
                 end_line: Some(20),
                 language: Some("rust".into()),
                 content_hash: None,
+                calls: None,
+                called_by: None,
             },
         ];
         store.upsert(&Namespace::from("test"), &docs).await.unwrap();
@@ -324,7 +365,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 3,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -349,7 +391,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 3,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -373,7 +416,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 3,
                 no_symbols: true,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -396,7 +440,8 @@ mod tests {
                 top_k: 1,
                 symbols_per_file: 3,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -418,7 +463,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 1,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -441,7 +487,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 3,
                 no_symbols: false,
-                scope: Some("src/finance/".into()),
+                scope: vec!["src/finance/".into()],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -467,7 +514,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 3,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap_err();
@@ -499,7 +547,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 3,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap_err();
@@ -530,7 +579,8 @@ mod tests {
                 top_k: 5,
                 symbols_per_file: 3,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -551,7 +601,8 @@ mod tests {
                 top_k: 2,
                 symbols_per_file: 1,
                 no_symbols: false,
-                scope: None,
+                scope: vec![],
+                filters: vec![],
             })
             .await
             .unwrap();
@@ -568,5 +619,92 @@ mod tests {
         assert!(first.get("score").is_some());
         assert!(first.get("summary").is_some());
         assert!(first.get("symbols").is_some());
+    }
+
+    #[tokio::test]
+    async fn filter_glob_prunes_results() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"));
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec!["**/commission.*".into()],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].path, "src/finance/commission.rs");
+    }
+
+    #[tokio::test]
+    async fn filter_glob_multiple_patterns_or() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"));
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec!["**/commission.*".into(), "**/login.*".into()],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.results.len(), 2);
+        let paths: Vec<&str> = report.results.iter().map(|r| r.path.as_str()).collect();
+        assert!(paths.contains(&"src/finance/commission.rs"));
+        assert!(paths.contains(&"src/auth/login.rs"));
+    }
+
+    #[tokio::test]
+    async fn filter_glob_no_match_returns_empty() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"));
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec!["*.go".into()],
+            })
+            .await
+            .unwrap();
+
+        assert!(report.results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn filter_invalid_glob_returns_error() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"));
+
+        let err = search
+            .run(&SearchParams {
+                query: "anything".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec!["[invalid".into()],
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("--filter"));
     }
 }

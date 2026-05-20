@@ -42,6 +42,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "s-release".into(),
@@ -55,6 +57,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: Some(45),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "s-refund".into(),
@@ -68,6 +72,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: Some(80),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "f-users".into(),
@@ -81,6 +87,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
         VectorDocument {
             id: "s-create-user".into(),
@@ -94,6 +102,8 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             end_line: Some(25),
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         },
     ];
 
@@ -129,13 +139,14 @@ async fn full_pipeline_json_matches_spec_contract() {
             top_k: 5,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
 
     // Render to JSON and parse back — this is what an agent does.
-    let json_str = output::render_json(&report).unwrap();
+    let json_str = output::render_json(&report, false).unwrap();
     let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
     // ── SPEC contract: top-level fields ──
@@ -178,12 +189,13 @@ async fn json_is_parseable_without_wdpkr_types() {
             top_k: 2,
             symbols_per_file: 2,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
 
-    let json_str = output::render_json(&report).unwrap();
+    let json_str = output::render_json(&report, false).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
     // Walk the entire structure — if any field is missing or wrong type,
@@ -214,12 +226,13 @@ async fn pretty_output_contains_all_key_info() {
             top_k: 5,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
 
-    let pretty = output::render_pretty(&report);
+    let pretty = output::render_pretty(&report, false);
 
     assert!(pretty.contains("src/finance/payments.rs"));
     assert!(pretty.contains("release_payment"));
@@ -239,7 +252,8 @@ async fn scope_filters_end_to_end() {
             top_k: 5,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: Some("src/finance/".into()),
+            scope: vec!["src/finance/".into()],
+            filters: vec![],
         })
         .await
         .unwrap();
@@ -267,7 +281,8 @@ async fn unrelated_query_returns_low_relevance() {
             top_k: 5,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
@@ -308,7 +323,8 @@ async fn embedder_mismatch_is_caught() {
             top_k: 5,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap_err();

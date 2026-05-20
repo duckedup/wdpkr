@@ -230,7 +230,8 @@ async fn index_then_search_round_trip() {
             top_k: 10,
             symbols_per_file: 5,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
@@ -279,7 +280,8 @@ async fn search_finds_indexed_file_paths() {
             top_k: 20,
             symbols_per_file: 10,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
@@ -324,7 +326,8 @@ async fn symbols_appear_nested_under_files() {
             top_k: 20,
             symbols_per_file: 10,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
@@ -382,7 +385,8 @@ async fn scope_filter_limits_results_after_index() {
             top_k: 20,
             symbols_per_file: 10,
             no_symbols: false,
-            scope: Some("src/".into()),
+            scope: vec!["src/".into()],
+            filters: vec![],
         })
         .await
         .unwrap();
@@ -543,12 +547,13 @@ async fn json_output_is_valid_after_full_pipeline() {
             top_k: 5,
             symbols_per_file: 3,
             no_symbols: false,
-            scope: None,
+            scope: vec![],
+            filters: vec![],
         })
         .await
         .unwrap();
 
-    let json_str = wdpkr::search::output::render_json(&result).unwrap();
+    let json_str = wdpkr::search::output::render_json(&result, false).unwrap();
     let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
     assert!(json["query"].is_string());
@@ -607,6 +612,12 @@ impl VectorStore for ArcStore {
         ns: &Namespace,
     ) -> anyhow::Result<std::collections::HashMap<String, String>> {
         self.0.get_content_hashes(ns).await
+    }
+    async fn list_documents(
+        &self,
+        ns: &Namespace,
+    ) -> anyhow::Result<Vec<wdpkr::store::VectorDocument>> {
+        self.0.list_documents(ns).await
     }
     async fn search(
         &self,

@@ -55,6 +55,9 @@ pub struct SymbolChunk {
     /// 1-based line range in the source file.
     pub start_line: u32,
     pub end_line: u32,
+    /// Raw outbound call identifiers found in the symbol body.
+    /// These are unresolved names — cross-file resolution happens at index time.
+    pub references: Vec<String>,
 }
 
 /// A structured import extracted from the AST.
@@ -215,6 +218,7 @@ mod tests {
             doc_comment: Some("Processes a payment for the given amount.".into()),
             start_line: 42,
             end_line: 78,
+            references: vec!["validate_amount".into(), "charge_card".into()],
         };
         assert_eq!(sym.name, "process_payment");
         assert_eq!(sym.kind, "function");

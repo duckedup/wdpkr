@@ -1,10 +1,12 @@
 pub mod config;
+pub mod eval;
 pub mod index;
 pub mod init;
 pub mod prompt;
 pub mod search;
 
 pub use config::{ConfigArgs, ConfigCommand};
+pub use eval::EvalArgs;
 pub use index::IndexArgs;
 pub use init::InitArgs;
 pub use search::SearchArgs;
@@ -41,6 +43,8 @@ pub enum Command {
     Index(IndexArgs),
     /// Initialize wdpkr for a repository
     Init(InitArgs),
+    /// Run evaluation suite to measure search quality and compression
+    Eval(EvalArgs),
 }
 
 /// Dispatch to the appropriate subcommand handler.
@@ -50,6 +54,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Search(args) => search::run(args).await,
         Command::Index(args) => index::run(args).await,
         Command::Init(args) => init::run(args).await,
+        Command::Eval(args) => eval::run(args).await,
     }
 }
 
@@ -84,7 +89,7 @@ mod tests {
                 assert_eq!(args.top_k, 5);
                 assert_eq!(args.symbols_per_file, 3);
                 assert!(!args.no_symbols);
-                assert!(args.scope.is_none());
+                assert!(args.scope.is_empty());
                 assert!(!args.pretty);
             }
             _ => panic!("expected Search"),
@@ -112,7 +117,7 @@ mod tests {
                 assert_eq!(args.top_k, 10);
                 assert_eq!(args.symbols_per_file, 5);
                 assert!(args.no_symbols);
-                assert_eq!(args.scope.as_deref(), Some("internal/finance/"));
+                assert_eq!(args.scope, vec!["internal/finance/".to_string()]);
                 assert!(args.pretty);
             }
             _ => panic!("expected Search"),

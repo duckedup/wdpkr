@@ -162,6 +162,14 @@ impl VectorStore for MockVectorStore {
         Ok(hashes)
     }
 
+    async fn list_documents(&self, ns: &Namespace) -> Result<Vec<VectorDocument>> {
+        let lock = self.namespaces.lock().unwrap();
+        let ns_data = lock
+            .get(ns.as_str())
+            .ok_or_else(|| anyhow::anyhow!("namespace '{}' not found", ns.as_str()))?;
+        Ok(ns_data.documents.values().cloned().collect())
+    }
+
     async fn search(
         &self,
         ns: &Namespace,
@@ -177,8 +185,11 @@ impl VectorStore for MockVectorStore {
             .documents
             .values()
             .filter(|doc| {
-                if let Some(ref prefix) = opts.path_prefix
-                    && !doc.file_path.starts_with(prefix.as_str())
+                if !opts.path_prefixes.is_empty()
+                    && !opts
+                        .path_prefixes
+                        .iter()
+                        .any(|p| doc.file_path.starts_with(p.as_str()))
                 {
                     return false;
                 }
@@ -220,6 +231,8 @@ impl VectorStore for MockVectorStore {
                 start_line: doc.start_line,
                 end_line: doc.end_line,
                 language: doc.language.clone(),
+                calls: doc.calls.clone(),
+                called_by: doc.called_by.clone(),
             })
             .collect())
     }
@@ -258,6 +271,8 @@ mod tests {
             end_line: None,
             language: Some("rust".into()),
             content_hash: None,
+            calls: None,
+            called_by: None,
         }
     }
 
@@ -391,7 +406,7 @@ mod tests {
                 &[1.0, 0.0, 0.0],
                 &SearchOptions {
                     top_k: 10,
-                    path_prefix: Some("src/finance/".into()),
+                    path_prefixes: vec!["src/finance/".into()],
                     ..Default::default()
                 },
             )
@@ -402,6 +417,36 @@ mod tests {
     }
 
     #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn search_filters_by_multiple_prefixes() {
+        let store = MockVectorStore::new();
+        store.create_namespace(&ns("repo"), 3).await.unwrap();
+
+        let docs = vec![
+            doc_with_vector("a", "src/finance/a.rs", vec![1.0, 0.0, 0.0]),
+            doc_with_vector("b", "src/auth/b.rs", vec![1.0, 0.0, 0.0]),
+            doc_with_vector("c", "src/api/c.rs", vec![1.0, 0.0, 0.0]),
+        ];
+        store.upsert(&ns("repo"), &docs).await.unwrap();
+
+        let results = store
+            .search(
+                &ns("repo"),
+                &[1.0, 0.0, 0.0],
+                &SearchOptions {
+                    top_k: 10,
+                    path_prefixes: vec!["src/finance/".into(), "src/auth/".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        let paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+        assert!(paths.contains(&"src/finance/a.rs"));
+        assert!(paths.contains(&"src/auth/b.rs"));
+    }
+
     #[tokio::test]
     async fn search_filters_by_chunk_kind() {
         let store = MockVectorStore::new();

@@ -11,11 +11,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, bail};
+use owo_colors::{OwoColorize, Stream};
 use tokio::sync::Semaphore;
 
 use crate::chunk::Chunker;
 use crate::embed::{Embedder, embedder_identity};
-use crate::store::{Namespace, NamespaceMetadata, VectorStore};
+use crate::store::{ChunkKind, Namespace, NamespaceMetadata, VectorDocument, VectorStore};
 use crate::summarize::Summarizer;
 
 pub struct IndexRun {
@@ -124,8 +125,10 @@ impl IndexRun {
 
         let total = to_process.len();
         eprintln!(
-            "  {total} files to process (concurrency: {})",
+            "  {} files to process (concurrency: {})",
+            total.if_supports_color(Stream::Stderr, |s| s.cyan()),
             self.concurrency
+                .if_supports_color(Stream::Stderr, |s| s.cyan()),
         );
 
         let semaphore = Arc::new(Semaphore::new(self.concurrency));
@@ -163,14 +166,14 @@ impl IndexRun {
         let mut processed = 0usize;
         let mut failed = 0usize;
         let mut skipped = 0usize;
-        let mut upserted = 0usize;
+        let mut all_documents: Vec<VectorDocument> = Vec::new();
 
         while let Some(join_result) = join_set.join_next().await {
             let result = join_result?;
             match result.outcome {
-                FileOutcome::Processed { vectors } => {
+                FileOutcome::Processed { documents } => {
                     processed += 1;
-                    upserted += vectors;
+                    all_documents.extend(documents);
                 }
                 FileOutcome::Skipped => {
                     skipped += 1;
@@ -180,6 +183,14 @@ impl IndexRun {
                 }
             }
         }
+
+        resolve_call_edges(&mut all_documents);
+
+        let upserted = self
+            .store
+            .upsert(&self.namespace, &all_documents)
+            .await?
+            .upserted;
 
         let new_meta = NamespaceMetadata {
             hwm_sha: Some(head.clone()),
@@ -205,7 +216,7 @@ struct FileResult {
 }
 
 enum FileOutcome {
-    Processed { vectors: usize },
+    Processed { documents: Vec<VectorDocument> },
     Skipped,
     Failed,
 }
@@ -237,7 +248,13 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
     let content = match std::fs::read_to_string(abs_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("  [{:>4}/{}] {rel_path} — error: {e}", index + 1, total);
+            let idx = format!("{:>4}/{}", index + 1, total);
+            eprintln!(
+                "  [{}] {rel_path} {} {}",
+                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                format!("error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
+            );
             return FileResult {
                 outcome: FileOutcome::Failed,
             };
@@ -255,52 +272,124 @@ async fn process_one_file(task: &FileTask<'_>) -> FileResult {
         };
     }
 
+    let idx = format!("{:>4}/{}", index + 1, total);
+
     match pipeline::process_file(rel_path, &content, chunker, summarizer, embedder).await {
         Ok(result) => {
             let t = &result.timing;
-            eprintln!(
-                "  [{:>4}/{}] {rel_path} ({} symbols) — summarize: {:.1}s, embed: {:.1}s",
-                index + 1,
-                total,
-                result.symbol_count,
+            let syms = format!("({} symbols)", result.symbol_count);
+            let timing = format!(
+                "summarize: {:.1}s, embed: {:.1}s",
                 t.summarize.as_secs_f64(),
                 t.embed.as_secs_f64(),
             );
-            // Delete existing vectors for this file before upserting so that
-            // symbols removed since the last index don't linger as stale results.
+            eprintln!(
+                "  [{}] {rel_path} {} {} {}",
+                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                syms.if_supports_color(Stream::Stderr, |s| s.green()),
+                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                timing.if_supports_color(Stream::Stderr, |s| s.yellow()),
+            );
             if let Err(e) = store.delete_by_file(namespace, rel_path).await {
                 eprintln!(
-                    "  [{:>4}/{}] {rel_path} — pre-upsert delete error: {e}",
-                    index + 1,
-                    total
+                    "  [{}] {rel_path} {} {}",
+                    idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                    "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                    format!("pre-upsert delete error: {e}")
+                        .if_supports_color(Stream::Stderr, |s| s.red()),
                 );
                 return FileResult {
                     outcome: FileOutcome::Failed,
                 };
             }
-            match store.upsert(namespace, &result.documents).await {
-                Ok(stats) => FileResult {
-                    outcome: FileOutcome::Processed {
-                        vectors: stats.upserted,
-                    },
+            FileResult {
+                outcome: FileOutcome::Processed {
+                    documents: result.documents,
                 },
-                Err(e) => {
-                    eprintln!(
-                        "  [{:>4}/{}] {rel_path} — upsert error: {e}",
-                        index + 1,
-                        total
-                    );
-                    FileResult {
-                        outcome: FileOutcome::Failed,
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "  [{}] {rel_path} {} {}",
+                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                format!("error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
+            );
+            FileResult {
+                outcome: FileOutcome::Failed,
+            }
+        }
+    }
+}
+
+pub fn resolve_call_edges(documents: &mut [VectorDocument]) {
+    use std::collections::HashMap;
+
+    let mut symbol_table: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
+    for (i, doc) in documents.iter().enumerate() {
+        if doc.chunk_kind == ChunkKind::Symbol
+            && let Some(ref name) = doc.symbol_name
+        {
+            symbol_table
+                .entry(name.as_str())
+                .or_default()
+                .push((i, doc.file_path.as_str()));
+        }
+    }
+
+    let mut called_by_map: HashMap<usize, Vec<String>> = HashMap::new();
+    for (i, doc) in documents.iter().enumerate() {
+        if doc.chunk_kind != ChunkKind::Symbol {
+            continue;
+        }
+        if let Some(ref calls) = doc.calls {
+            let caller_name = doc.symbol_name.as_deref().unwrap_or("?");
+            let caller_ref = format!("{}:{}", doc.file_path, caller_name);
+            for call_name in calls {
+                if let Some(targets) = symbol_table.get(call_name.as_str()) {
+                    for &(target_idx, _) in targets {
+                        if target_idx != i {
+                            called_by_map
+                                .entry(target_idx)
+                                .or_default()
+                                .push(caller_ref.clone());
+                        }
                     }
                 }
             }
         }
-        Err(e) => {
-            eprintln!("  [{:>4}/{}] {rel_path} — error: {e}", index + 1, total);
-            FileResult {
-                outcome: FileOutcome::Failed,
-            }
+    }
+
+    let resolved_calls: Vec<(usize, Vec<String>)> = documents
+        .iter()
+        .enumerate()
+        .filter(|(_, doc)| doc.chunk_kind == ChunkKind::Symbol && doc.calls.is_some())
+        .map(|(i, doc)| {
+            let resolved: Vec<String> = doc
+                .calls
+                .as_ref()
+                .unwrap()
+                .iter()
+                .flat_map(|name| {
+                    symbol_table
+                        .get(name.as_str())
+                        .into_iter()
+                        .flatten()
+                        .map(move |&(_, file)| format!("{file}:{name}"))
+                })
+                .collect();
+            (i, resolved)
+        })
+        .collect();
+
+    drop(symbol_table);
+
+    for (i, resolved) in resolved_calls {
+        documents[i].calls = Some(resolved);
+    }
+    for (i, doc) in documents.iter_mut().enumerate() {
+        if doc.chunk_kind == ChunkKind::Symbol {
+            doc.called_by = Some(called_by_map.remove(&i).unwrap_or_default());
         }
     }
 }
@@ -312,5 +401,102 @@ pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
         Ok(Namespace::from(git::derive_namespace(&remote)))
     } else {
         Ok(Namespace::from(ns.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sym_doc(id: &str, file: &str, name: &str, calls: Vec<&str>) -> VectorDocument {
+        VectorDocument {
+            id: id.into(),
+            vector: vec![0.0; 3],
+            summary: String::new(),
+            file_path: file.into(),
+            chunk_kind: ChunkKind::Symbol,
+            symbol_name: Some(name.into()),
+            symbol_kind: Some("function".into()),
+            start_line: Some(1),
+            end_line: Some(10),
+            language: Some("rust".into()),
+            content_hash: None,
+            calls: Some(calls.into_iter().map(String::from).collect()),
+            called_by: None,
+        }
+    }
+
+    #[test]
+    fn resolve_populates_calls_and_called_by() {
+        let mut docs = vec![
+            sym_doc("s1", "src/a.rs", "orchestrate", vec!["validate", "process"]),
+            sym_doc("s2", "src/b.rs", "validate", vec![]),
+            sym_doc("s3", "src/b.rs", "process", vec!["validate"]),
+        ];
+
+        resolve_call_edges(&mut docs);
+
+        let orchestrate = &docs[0];
+        let calls = orchestrate.calls.as_ref().unwrap();
+        assert!(
+            calls.contains(&"src/b.rs:validate".to_string()),
+            "calls: {calls:?}"
+        );
+        assert!(
+            calls.contains(&"src/b.rs:process".to_string()),
+            "calls: {calls:?}"
+        );
+
+        let validate = &docs[1];
+        let called_by = validate.called_by.as_ref().unwrap();
+        assert!(
+            called_by.contains(&"src/a.rs:orchestrate".to_string()),
+            "called_by: {called_by:?}"
+        );
+        assert!(
+            called_by.contains(&"src/b.rs:process".to_string()),
+            "called_by: {called_by:?}"
+        );
+
+        let process = &docs[2];
+        let called_by = process.called_by.as_ref().unwrap();
+        assert!(
+            called_by.contains(&"src/a.rs:orchestrate".to_string()),
+            "called_by: {called_by:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_drops_unresolved_calls() {
+        let mut docs = vec![sym_doc(
+            "s1",
+            "src/a.rs",
+            "main",
+            vec!["println", "nonexistent"],
+        )];
+
+        resolve_call_edges(&mut docs);
+
+        let calls = docs[0].calls.as_ref().unwrap();
+        assert!(calls.is_empty(), "unresolved should be dropped: {calls:?}");
+    }
+
+    #[test]
+    fn resolve_sets_empty_called_by_for_leaf_symbols() {
+        let mut docs = vec![sym_doc("s1", "src/a.rs", "leaf", vec![])];
+
+        resolve_call_edges(&mut docs);
+
+        assert_eq!(docs[0].called_by, Some(vec![]));
+    }
+
+    #[test]
+    fn resolve_skips_file_level_documents() {
+        let mut docs = vec![crate::testing::sample_document("src/a.rs", ChunkKind::File)];
+
+        resolve_call_edges(&mut docs);
+
+        assert!(docs[0].calls.is_none());
+        assert!(docs[0].called_by.is_none());
     }
 }

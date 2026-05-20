@@ -169,6 +169,7 @@ jobs:
           gh release create "${{ needs.check-version.outputs.tag }}" \
             wdpkr-*.tar.gz wdpkr-*.zip \
             --title "${{ needs.check-version.outputs.tag }}" \
+            --latest \
             --notes "## wdpkr ${{ needs.check-version.outputs.version }}
 
           \`\`\`sh

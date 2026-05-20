@@ -1,0 +1,87 @@
+{
+  "name": "wdpkr-self-eval",
+  "description": "Eval suite for wdpkr queried against its own indexed codebase.",
+  "cases": [
+    {
+      "label": "search-pipeline",
+      "query": "How does the search pipeline work end to end?",
+      "expected_files": [
+        "src/search/mod.rs",
+        "src/search/output.rs",
+        "src/cli/search.rs"
+      ],
+      "top_k": 5,
+      "tags": ["search"]
+    },
+    {
+      "label": "config-resolution",
+      "query": "How is configuration resolved from defaults, file, and environment variables?",
+      "expected_files": [
+        "src/config/mod.rs"
+      ],
+      "top_k": 5,
+      "tags": ["config"]
+    },
+    {
+      "label": "vector-store-trait",
+      "query": "What is the VectorStore trait and how is it used?",
+      "expected_files": [
+        "src/store/mod.rs",
+        "src/store/turbopuffer.rs"
+      ],
+      "top_k": 5,
+      "tags": ["store"]
+    },
+    {
+      "label": "embedder-providers",
+      "query": "What embedding providers are supported and how do they differ?",
+      "expected_files": [
+        "src/embed/mod.rs",
+        "src/embed/voyage.rs",
+        "src/embed/ollama.rs",
+        "src/embed/openai.rs"
+      ],
+      "top_k": 5,
+      "tags": ["embed"]
+    },
+    {
+      "label": "tree-sitter-chunking",
+      "query": "How does tree-sitter chunking extract symbols from source files?",
+      "expected_files": [
+        "src/chunk/tree_sitter.rs",
+        "src/chunk/mod.rs",
+        "src/chunk/languages.rs"
+      ],
+      "top_k": 5,
+      "tags": ["chunk"]
+    },
+    {
+      "label": "indexer-pipeline",
+      "query": "How does the indexer process files through the summarize and embed pipeline?",
+      "expected_files": [
+        "src/indexer/mod.rs",
+        "src/indexer/pipeline.rs"
+      ],
+      "top_k": 5,
+      "tags": ["indexer"]
+    },
+    {
+      "label": "compression-only-broad",
+      "query": "What are the main modules and how do they connect?",
+      "expected_files": [],
+      "top_k": 10,
+      "tags": ["overview"]
+    },
+    {
+      "label": "mock-testing",
+      "query": "How are mocks used for testing without live API calls?",
+      "expected_files": [
+        "src/testing/mod.rs",
+        "src/testing/mock_store.rs",
+        "src/testing/mock_embed.rs"
+      ],
+      "top_k": 5,
+      "tags": ["testing"]
+    }
+  ]
+}

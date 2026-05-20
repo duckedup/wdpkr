@@ -77,6 +77,8 @@ pub async fn process_file(
         end_line: None,
         language: Some(language.to_string()),
         content_hash: Some(content_hash.clone()),
+        calls: None,
+        called_by: None,
     });
 
     // Symbol-level documents
@@ -98,6 +100,8 @@ pub async fn process_file(
             end_line: Some(sym.end_line),
             language: Some(language.to_string()),
             content_hash: None,
+            calls: Some(sym.references.clone()),
+            called_by: None,
         });
     }
     let embed_time = t2.elapsed();
