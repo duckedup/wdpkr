@@ -275,6 +275,7 @@ mod tests {
         (search, reader)
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn run_case_compression() {
         let (search, reader) = setup().await;
@@ -294,6 +295,7 @@ mod tests {
         assert!(result.files_returned > 0);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn run_case_relevance() {
         let (search, reader) = setup().await;
@@ -313,6 +315,7 @@ mod tests {
         assert!(rel.found.contains(&"src/main.rs".to_string()));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn run_suite_summary() {
         let (search, reader) = setup().await;

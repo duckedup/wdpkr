@@ -127,6 +127,7 @@ fn search_run(embedder: MockEmbedder, store: MockVectorStore) -> SearchRun {
     )
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn full_pipeline_json_matches_spec_contract() {
     let (store, embedder) = seeded_env().await;
@@ -173,6 +174,7 @@ async fn full_pipeline_json_matches_spec_contract() {
     assert!(sym["score"].is_number());
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn json_is_parseable_without_wdpkr_types() {
     // Simulates an agent parsing the JSON with only serde_json — no
@@ -212,6 +214,7 @@ async fn json_is_parseable_without_wdpkr_types() {
     }
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn pretty_output_contains_all_key_info() {
     let (store, embedder) = seeded_env().await;
@@ -237,6 +240,7 @@ async fn pretty_output_contains_all_key_info() {
     assert!(pretty.contains("e2e-test-sha"));
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn scope_filters_end_to_end() {
     let (store, embedder) = seeded_env().await;
@@ -265,6 +269,7 @@ async fn scope_filters_end_to_end() {
     assert!(!report.results.is_empty());
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn unrelated_query_returns_low_relevance() {
     let (store, embedder) = seeded_env().await;
@@ -293,6 +298,7 @@ async fn unrelated_query_returns_low_relevance() {
     }
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn embedder_mismatch_is_caught() {
     let (store, embedder) = seeded_env().await;

@@ -276,6 +276,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn create_and_check_namespace() {
         let store = MockVectorStore::new();
@@ -284,6 +285,7 @@ mod tests {
         assert!(store.namespace_exists(&ns("repo")).await.unwrap());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn create_duplicate_namespace_errors() {
         let store = MockVectorStore::new();
@@ -291,6 +293,7 @@ mod tests {
         assert!(store.create_namespace(&ns("repo"), 3).await.is_err());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn delete_namespace() {
         let store = MockVectorStore::new();
@@ -299,6 +302,7 @@ mod tests {
         assert!(!store.namespace_exists(&ns("repo")).await.unwrap());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn metadata_round_trip() {
         let store = MockVectorStore::new();
@@ -316,12 +320,14 @@ mod tests {
         assert_eq!(loaded.embedder.as_deref(), Some("voyage/voyage-code-3"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn metadata_on_missing_namespace_errors() {
         let store = MockVectorStore::new();
         assert!(store.get_metadata(&ns("nope")).await.is_err());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn upsert_and_search() {
         let store = MockVectorStore::new();
@@ -355,6 +361,7 @@ mod tests {
         assert_eq!(results[2].id, "b");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_respects_top_k() {
         let store = MockVectorStore::new();
@@ -381,6 +388,7 @@ mod tests {
         assert_eq!(results[0].id, "a");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_filters_by_path_prefix() {
         let store = MockVectorStore::new();
@@ -408,6 +416,7 @@ mod tests {
         assert_eq!(results[0].file_path, "src/finance/a.rs");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_filters_by_multiple_prefixes() {
         let store = MockVectorStore::new();
@@ -438,6 +447,7 @@ mod tests {
         assert!(paths.contains(&"src/auth/b.rs"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_filters_by_chunk_kind() {
         let store = MockVectorStore::new();
@@ -471,6 +481,7 @@ mod tests {
         assert_eq!(results[0].symbol_name.as_deref(), Some("run"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_filters_by_min_score() {
         let store = MockVectorStore::new();
@@ -498,6 +509,7 @@ mod tests {
         assert_eq!(results[0].id, "close");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn delete_by_ids() {
         let store = MockVectorStore::new();
@@ -525,6 +537,7 @@ mod tests {
         assert_eq!(results[0].id, "b");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn delete_by_file() {
         let store = MockVectorStore::new();
@@ -553,6 +566,7 @@ mod tests {
         assert_eq!(results[0].file_path, "src/b.rs");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn upsert_overwrites_existing_id() {
         let store = MockVectorStore::new();
@@ -586,6 +600,7 @@ mod tests {
         assert_eq!(results[0].summary, "updated summary");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn upsert_dimension_mismatch_errors() {
         let store = MockVectorStore::new();
@@ -595,6 +610,7 @@ mod tests {
         assert!(store.upsert(&ns("repo"), &[bad_doc]).await.is_err());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_on_missing_namespace_errors() {
         let store = MockVectorStore::new();

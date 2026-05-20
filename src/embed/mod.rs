@@ -81,6 +81,7 @@ mod tests {
 
     // ── Factory ───────────────────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn factory_voyage_with_key() {
         let config = EmbedConfig {
@@ -96,6 +97,7 @@ mod tests {
         assert_eq!(e.dimension(), 1024);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn factory_openai_with_key() {
         let config = EmbedConfig {
@@ -111,6 +113,7 @@ mod tests {
         assert_eq!(e.dimension(), 3072);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn factory_voyage_without_key_errors() {
         let config = EmbedConfig {
@@ -124,6 +127,7 @@ mod tests {
         assert!(build_embedder(&config).await.is_err());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn factory_unknown_provider_errors() {
         let config = EmbedConfig {

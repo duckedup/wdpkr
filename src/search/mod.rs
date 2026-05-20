@@ -352,6 +352,7 @@ mod tests {
         e
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_returns_ranked_results() {
         let store = seeded_store().await;
@@ -377,6 +378,7 @@ mod tests {
         assert_eq!(report.results[0].path, "src/finance/commission.rs");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn symbols_nested_under_files() {
         let store = seeded_store().await;
@@ -401,6 +403,7 @@ mod tests {
         assert_eq!(commission.symbols[0].name, "release_payment");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn no_symbols_flag_omits_symbols() {
         let store = seeded_store().await;
@@ -424,6 +427,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn top_k_limits_file_count() {
         let store = seeded_store().await;
@@ -446,6 +450,7 @@ mod tests {
         assert_eq!(report.results[0].path, "src/finance/commission.rs");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn symbols_per_file_limits_symbol_count() {
         let store = seeded_store().await;
@@ -469,6 +474,7 @@ mod tests {
         assert_eq!(commission.symbols[0].name, "release_payment");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn scope_filters_by_path_prefix() {
         let store = seeded_store().await;
@@ -491,6 +497,7 @@ mod tests {
         assert!(report.results[0].path.starts_with("src/finance/"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn missing_namespace_errors() {
         let store = MockVectorStore::new();
@@ -515,6 +522,7 @@ mod tests {
         assert!(err.to_string().contains("index not found"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedder_mismatch_errors() {
         let store = seeded_store().await;
@@ -547,6 +555,7 @@ mod tests {
         assert!(err.to_string().contains("embedder mismatch"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn indexed_at_reflects_hwm() {
         let store = seeded_store().await;
@@ -579,6 +588,7 @@ mod tests {
         assert_eq!(report.indexed_at.as_deref(), Some("abc123def456"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn report_serializes_to_spec_json_shape() {
         let store = seeded_store().await;
@@ -611,6 +621,7 @@ mod tests {
         assert!(first.get("symbols").is_some());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_glob_prunes_results() {
         let store = seeded_store().await;
@@ -633,6 +644,7 @@ mod tests {
         assert_eq!(report.results[0].path, "src/finance/commission.rs");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_glob_multiple_patterns_or() {
         let store = seeded_store().await;
@@ -657,6 +669,7 @@ mod tests {
         assert!(paths.contains(&"src/auth/login.rs"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_glob_no_match_returns_empty() {
         let store = seeded_store().await;
@@ -678,6 +691,7 @@ mod tests {
         assert!(report.results.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_invalid_glob_returns_error() {
         let store = seeded_store().await;

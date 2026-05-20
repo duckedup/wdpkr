@@ -139,6 +139,7 @@ fn build_index_run(store: MockVectorStore, embedder: MockEmbedder) -> IndexRun {
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn full_index_populates_store() {
     let dir = create_fixture_repo("full-index");
@@ -156,6 +157,7 @@ async fn full_index_populates_store() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn index_produces_file_and_symbol_documents() {
     let dir = create_fixture_repo("docs");
@@ -176,6 +178,7 @@ async fn index_produces_file_and_symbol_documents() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn hwm_is_stored_after_indexing() {
     let dir = create_fixture_repo("hwm");
@@ -194,6 +197,7 @@ async fn hwm_is_stored_after_indexing() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn index_then_search_round_trip() {
     let dir = create_fixture_repo("round-trip");
@@ -247,6 +251,7 @@ async fn index_then_search_round_trip() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn search_finds_indexed_file_paths() {
     let dir = create_fixture_repo("paths");
@@ -292,6 +297,7 @@ async fn search_finds_indexed_file_paths() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn symbols_appear_nested_under_files() {
     let dir = create_fixture_repo("symbols");
@@ -348,6 +354,7 @@ async fn symbols_appear_nested_under_files() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn scope_filter_limits_results_after_index() {
     let dir = create_fixture_repo("scope");
@@ -395,6 +402,7 @@ async fn scope_filter_limits_results_after_index() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn incremental_index_only_processes_changed_files() {
     let dir = create_fixture_repo("incremental");
@@ -445,6 +453,7 @@ async fn incremental_index_only_processes_changed_files() {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn incremental_index_removes_stale_symbols() {
     let dir = create_fixture_repo("stale-syms");
@@ -509,6 +518,7 @@ pub fn release_payment(payee_id: u64, amount: f64) -> Result<(), String> {
     cleanup(&dir);
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn json_output_is_valid_after_full_pipeline() {
     let dir = create_fixture_repo("json-output");
