@@ -34,6 +34,11 @@ pub struct IndexArgs {
     /// Hard cost cap in USD; abort if estimated remaining cost exceeds this
     #[arg(long)]
     pub max_cost: Option<f64>,
+
+    /// Re-chunk all files and rebuild call-graph edges without re-summarizing
+    /// or re-embedding. Zero API calls — uses existing vectors from the store.
+    #[arg(long)]
+    pub skip_summaries: bool,
 }
 
 pub async fn run(args: IndexArgs) -> Result<()> {
@@ -45,6 +50,10 @@ pub async fn run(args: IndexArgs) -> Result<()> {
 
     if args.dry_run {
         return run_dry_run(&config).await;
+    }
+
+    if args.skip_summaries {
+        return run_skip_summaries(&config).await;
     }
 
     config.embed.validate()?;
@@ -102,6 +111,100 @@ pub async fn run(args: IndexArgs) -> Result<()> {
             sha.if_supports_color(Stream::Stderr, |s| s.dimmed())
         );
     }
+
+    Ok(())
+}
+
+async fn run_skip_summaries(config: &Config) -> Result<()> {
+    use crate::chunk::tree_sitter::TreeSitterChunker;
+    use crate::chunk::{Chunker, detect_language};
+    use crate::indexer::{resolve_call_edges, walk};
+    use crate::store::ChunkKind;
+    use std::collections::HashMap;
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let root = std::env::current_dir()?;
+    let namespace = resolve_namespace(config)?;
+    let embedder = build_embedder(&config.embed).await?;
+    let store = build_store(&config.store, embedder.dimension())?;
+
+    eprintln!(
+        "Rebuilding call graph for namespace '{}'...",
+        namespace
+            .as_str()
+            .if_supports_color(Stream::Stderr, |s| s.cyan()),
+    );
+
+    if !store.namespace_exists(&namespace).await? {
+        bail!(
+            "namespace '{}' does not exist; run `wdpkr index` first",
+            namespace.as_str()
+        );
+    }
+
+    eprintln!("  Fetching existing documents from store...");
+    let mut documents = store.list_documents(&namespace).await?;
+    eprintln!(
+        "  {} existing documents",
+        documents
+            .len()
+            .if_supports_color(Stream::Stderr, |s| s.cyan()),
+    );
+
+    eprintln!("  Chunking all files for call references...");
+    let chunker = TreeSitterChunker::new();
+    let files = walk::walk_files(&root)?;
+    let mut ref_table: HashMap<(String, String), Vec<String>> = HashMap::new();
+
+    for path in &files {
+        let rel_path = path
+            .strip_prefix(&root)
+            .map(|r| r.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let language = detect_language(&rel_path).unwrap_or("unknown");
+        if let Ok(chunks) = chunker.chunk(&rel_path, &content, language) {
+            for sym in chunks.symbols {
+                ref_table.insert((rel_path.clone(), sym.name.clone()), sym.references);
+            }
+        }
+    }
+
+    let mut updated = 0usize;
+    for doc in &mut documents {
+        if doc.chunk_kind != ChunkKind::Symbol {
+            continue;
+        }
+        if let Some(ref name) = doc.symbol_name {
+            let key = (doc.file_path.clone(), name.clone());
+            if let Some(refs) = ref_table.get(&key) {
+                doc.calls = Some(refs.clone());
+                updated += 1;
+            }
+        }
+    }
+
+    eprintln!(
+        "  {} symbols updated with call references",
+        updated.if_supports_color(Stream::Stderr, |s| s.green()),
+    );
+
+    resolve_call_edges(&mut documents);
+
+    store.upsert(&namespace, &documents).await?;
+
+    let elapsed = format!("{:.1}s", start.elapsed().as_secs_f64());
+    eprintln!(
+        "\nDone in {}: {} documents re-upserted with call graph data",
+        elapsed.if_supports_color(Stream::Stderr, |s| s.cyan()),
+        documents
+            .len()
+            .if_supports_color(Stream::Stderr, |s| s.green()),
+    );
 
     Ok(())
 }

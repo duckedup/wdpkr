@@ -15,6 +15,17 @@ This repo has a semantic codebase index via `wdpkr`. Use it to **locate feature 
 | `--symbols-per-file <N>` | Max symbols per file (default 3) |
 | `--pretty` | Human-readable colored output instead of JSON |
 
+#### Call graph data
+
+Symbol-level results include `calls` and `called_by` fields when the index has been built with call-graph support. Use these to assess blast radius before making changes:
+
+- `"calls": ["src/finance/rates.rs:lookup_rate_table"]` — this symbol calls `lookup_rate_table` in `src/finance/rates.rs`
+- `"called_by": ["src/api/handler.rs:process_request"]` — `process_request` depends on this symbol
+
+A `null` value means the symbol hasn't been indexed with call-graph data yet (run `wdpkr index --skip-summaries` to rebuild). An empty array `[]` means the symbol genuinely has no callers or callees.
+
+When changing a symbol, check its `called_by` to find all dependents — read those files to verify your change doesn't break callers. When exploring unfamiliar code, check `calls` to understand what a function depends on before diving into its implementation.
+
 #### When to use
 
 - **Conceptual questions** where you don't know what to grep for: "where does X live," "how is Y implemented"
