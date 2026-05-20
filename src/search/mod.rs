@@ -621,6 +621,7 @@ mod tests {
         assert!(first.get("symbols").is_some());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_glob_prunes_results() {
         let store = seeded_store().await;
@@ -643,6 +644,7 @@ mod tests {
         assert_eq!(report.results[0].path, "src/finance/commission.rs");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_glob_multiple_patterns_or() {
         let store = seeded_store().await;
@@ -667,6 +669,7 @@ mod tests {
         assert!(paths.contains(&"src/auth/login.rs"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_glob_no_match_returns_empty() {
         let store = seeded_store().await;
@@ -688,6 +691,7 @@ mod tests {
         assert!(report.results.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn filter_invalid_glob_returns_error() {
         let store = seeded_store().await;

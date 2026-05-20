@@ -720,6 +720,7 @@ public class Calculator {
 
     // ── Reference extraction ─────────────────────────────────────────
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_call_references() {
         let src = r#"
@@ -748,6 +749,7 @@ fn orchestrate() {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_method_call_references() {
         let src = r#"
@@ -770,6 +772,7 @@ fn work(svc: &Service) {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_scoped_call_references() {
         let src = r#"
@@ -792,6 +795,7 @@ fn create() {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_extracts_macro_references() {
         let src = r#"
@@ -814,6 +818,7 @@ fn log_stuff() {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_deduplicates_references() {
         let src = r#"
@@ -833,6 +838,7 @@ fn repeated() {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn rust_no_calls_means_empty_references() {
         let src = r#"
@@ -845,6 +851,7 @@ fn pure(x: i32) -> i32 {
         assert!(sym.references.is_empty(), "refs: {:?}", sym.references);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn go_extracts_call_references() {
         let src = r#"
@@ -875,6 +882,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn python_extracts_call_references() {
         let src = r#"
@@ -902,6 +910,7 @@ def orchestrate():
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn typescript_extracts_call_references() {
         let src = r#"
@@ -934,6 +943,7 @@ function handleRequest(req: Request): Response {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn java_extracts_method_invocation_references() {
         let src = r#"
@@ -964,6 +974,7 @@ public class Service {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn last_identifier_segment_splits_correctly() {
         assert_eq!(last_identifier_segment("foo"), "foo");

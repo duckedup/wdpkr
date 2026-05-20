@@ -447,6 +447,7 @@ mod tests {
         assert!(paths.contains(&"src/auth/b.rs"));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn search_filters_by_chunk_kind() {
         let store = MockVectorStore::new();
