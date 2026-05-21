@@ -260,7 +260,6 @@ impl VectorStore for TurbopufferStore {
             ])),
             include_attributes: Some(serde_json::json!(["file_path", "content_hash"])),
             limit: Some(10_000),
-            include_vectors: Some(false),
             ..Default::default()
         };
 
@@ -286,22 +285,37 @@ impl VectorStore for TurbopufferStore {
 
     async fn list_documents(&self, ns: &Namespace) -> Result<Vec<VectorDocument>> {
         let url = format!("{}/query", self.ns_url(ns));
-        let body = QueryRequest {
-            filters: Some(serde_json::json!(["id", "NotEq", META_VECTOR_ID])),
-            include_attributes: Some(serde_json::json!(true)),
-            include_vectors: Some(true),
-            limit: Some(10_000),
-            ..Default::default()
-        };
+        let mut all_docs = Vec::new();
+        let mut cursor: Option<String> = None;
 
-        let resp = self.post_json(&url, &body).await?;
-        if !resp.status().is_success() {
-            let err = resp.text().await.unwrap_or_default();
-            bail!("list_documents failed: {err}");
+        loop {
+            let body = QueryRequest {
+                filters: Some(serde_json::json!(["id", "NotEq", META_VECTOR_ID])),
+                include_attributes: Some(serde_json::json!(true)),
+                limit: Some(10_000),
+                cursor: cursor.clone(),
+                ..Default::default()
+            };
+
+            let resp = self.post_json(&url, &body).await?;
+            if !resp.status().is_success() {
+                let err = resp.text().await.unwrap_or_default();
+                bail!("list_documents failed: {err}");
+            }
+
+            let query_resp: QueryResponse = resp.json().await.context("parsing list response")?;
+
+            for row in query_resp.rows {
+                all_docs.push(row_to_document(row)?);
+            }
+
+            match query_resp.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
         }
 
-        let query_resp: QueryResponse = resp.json().await.context("parsing list response")?;
-        query_resp.rows.into_iter().map(row_to_document).collect()
+        Ok(all_docs)
     }
 
     async fn search(
@@ -596,13 +610,14 @@ struct QueryRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     aggregate_by: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    include_vectors: Option<bool>,
+    cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct QueryResponse {
     #[serde(default)]
     rows: Vec<HashMap<String, serde_json::Value>>,
+    next_cursor: Option<String>,
 }
 
 fn backoff(attempt: usize) -> Duration {
