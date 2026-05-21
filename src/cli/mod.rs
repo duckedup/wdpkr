@@ -1,4 +1,5 @@
 pub mod config;
+pub mod delete;
 pub mod eval;
 pub mod index;
 pub mod init;
@@ -6,6 +7,7 @@ pub mod prompt;
 pub mod search;
 
 pub use config::{ConfigArgs, ConfigCommand};
+pub use delete::DeleteArgs;
 pub use eval::EvalArgs;
 pub use index::IndexArgs;
 pub use init::InitArgs;
@@ -41,6 +43,8 @@ pub enum Command {
     Search(SearchArgs),
     /// Index the codebase
     Index(IndexArgs),
+    /// Delete vectors from the index by file path glob
+    Delete(DeleteArgs),
     /// Initialize wdpkr for a repository
     Init(InitArgs),
     /// Run evaluation suite to measure search quality and compression
@@ -53,6 +57,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Config(args) => config::run(args).await,
         Command::Search(args) => search::run(args).await,
         Command::Index(args) => index::run(args).await,
+        Command::Delete(args) => delete::run(args).await,
         Command::Init(args) => init::run(args).await,
         Command::Eval(args) => eval::run(args).await,
     }

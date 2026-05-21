@@ -607,6 +607,9 @@ impl VectorStore for ArcStore {
     async fn delete_by_file(&self, ns: &Namespace, file_path: &str) -> anyhow::Result<()> {
         self.0.delete_by_file(ns, file_path).await
     }
+    async fn delete_by_glob(&self, ns: &Namespace, pattern: &str) -> anyhow::Result<usize> {
+        self.0.delete_by_glob(ns, pattern).await
+    }
     async fn get_content_hashes(
         &self,
         ns: &Namespace,

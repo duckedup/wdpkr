@@ -146,6 +146,21 @@ impl VectorStore for MockVectorStore {
         Ok(())
     }
 
+    async fn delete_by_glob(&self, ns: &Namespace, pattern: &str) -> Result<usize> {
+        let glob = globset::Glob::new(pattern)
+            .map_err(|e| anyhow::anyhow!("invalid glob: {e}"))?
+            .compile_matcher();
+        let mut lock = self.namespaces.lock().unwrap();
+        let ns_data = lock
+            .get_mut(ns.as_str())
+            .ok_or_else(|| anyhow::anyhow!("namespace '{}' not found", ns.as_str()))?;
+        let before = ns_data.documents.len();
+        ns_data
+            .documents
+            .retain(|_, doc| !glob.is_match(&doc.file_path));
+        Ok(before - ns_data.documents.len())
+    }
+
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>> {
         let lock = self.namespaces.lock().unwrap();
         let ns_data = lock
