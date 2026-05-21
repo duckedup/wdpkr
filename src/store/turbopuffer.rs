@@ -247,6 +247,33 @@ impl VectorStore for TurbopufferStore {
         Ok(())
     }
 
+    async fn delete_by_glob(&self, ns: &Namespace, pattern: &str) -> Result<usize> {
+        let url = format!("{}/query", self.ns_url(ns));
+        let count_body = QueryRequest {
+            filters: Some(serde_json::json!(["file_path", "Glob", pattern])),
+            aggregate_by: Some(serde_json::json!({"n": ["Count"]})),
+            ..Default::default()
+        };
+        let count_resp = self.post_json(&url, &count_body).await?;
+        let count: usize = if count_resp.status().is_success() {
+            let json: serde_json::Value = count_resp.json().await.unwrap_or_default();
+            json["aggregations"]["n"].as_u64().unwrap_or(0) as usize
+        } else {
+            0
+        };
+
+        let body = WriteRequest {
+            delete_by_filter: Some(serde_json::json!(["file_path", "Glob", pattern])),
+            ..Default::default()
+        };
+        let resp = self.post_json(&self.ns_url(ns), &body).await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            bail!("delete_by_glob failed: {err}");
+        }
+        Ok(count)
+    }
+
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>> {
         let url = format!("{}/query", self.ns_url(ns));
 

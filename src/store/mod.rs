@@ -47,6 +47,9 @@ pub trait VectorStore: Send + Sync {
     /// incremental indexing.
     async fn delete_by_file(&self, ns: &Namespace, file_path: &str) -> Result<()>;
 
+    /// Delete all documents whose `file_path` matches a glob pattern.
+    async fn delete_by_glob(&self, ns: &Namespace, pattern: &str) -> Result<usize>;
+
     /// Return a map of file_path → content_hash for all file-level documents
     /// in the namespace. Used by the indexer to skip unchanged files.
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>>;
