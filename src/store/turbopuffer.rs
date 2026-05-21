@@ -313,14 +313,22 @@ impl VectorStore for TurbopufferStore {
     async fn list_documents(&self, ns: &Namespace) -> Result<Vec<VectorDocument>> {
         let url = format!("{}/query", self.ns_url(ns));
         let mut all_docs = Vec::new();
-        let mut cursor: Option<String> = None;
+        let mut after_id: Option<String> = None;
+        let page_size = 10_000;
 
         loop {
+            let filters = match &after_id {
+                Some(id) => {
+                    serde_json::json!(["And", [["id", "NotEq", META_VECTOR_ID], ["id", "Gt", id]]])
+                }
+                None => serde_json::json!(["id", "NotEq", META_VECTOR_ID]),
+            };
+
             let body = QueryRequest {
-                filters: Some(serde_json::json!(["id", "NotEq", META_VECTOR_ID])),
+                rank_by: Some(serde_json::json!(["id", "asc"])),
+                filters: Some(filters),
                 include_attributes: Some(serde_json::json!(true)),
-                limit: Some(10_000),
-                cursor: cursor.clone(),
+                limit: Some(page_size),
                 ..Default::default()
             };
 
@@ -331,14 +339,16 @@ impl VectorStore for TurbopufferStore {
             }
 
             let query_resp: QueryResponse = resp.json().await.context("parsing list response")?;
+            let page_len = query_resp.rows.len();
 
             for row in query_resp.rows {
-                all_docs.push(row_to_document(row)?);
+                let doc = row_to_document(row)?;
+                after_id = Some(doc.id.clone());
+                all_docs.push(doc);
             }
 
-            match query_resp.next_cursor {
-                Some(c) => cursor = Some(c),
-                None => break,
+            if page_len < page_size {
+                break;
             }
         }
 
@@ -636,15 +646,12 @@ struct QueryRequest {
     include_attributes: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     aggregate_by: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct QueryResponse {
     #[serde(default)]
     rows: Vec<HashMap<String, serde_json::Value>>,
-    next_cursor: Option<String>,
 }
 
 fn backoff(attempt: usize) -> Duration {

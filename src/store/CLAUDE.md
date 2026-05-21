@@ -27,6 +27,14 @@ include_attributes: Some(json!(true))
 include_attributes: Some(json!(["file_path", "content_hash"]))
 ```
 
+### Pagination
+
+v2 has **no cursor-based pagination**. Do NOT add `cursor`/`next_cursor` fields. To page through all rows:
+
+1. Order by ID: `rank_by: ["id", "asc"]`
+2. After each page, filter with `["id", "Gt", last_id]`
+3. Stop when the page returns fewer rows than the limit
+
 ### Reference
 
 Turbopuffer v2 docs: https://turbopuffer.com/docs
