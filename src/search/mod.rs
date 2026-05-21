@@ -41,7 +41,8 @@ pub struct SearchReport {
 pub struct FileResult {
     pub path: String,
     pub score: f32,
-    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub symbols: Vec<SymbolResult>,
 }
 
@@ -50,7 +51,8 @@ pub struct SymbolResult {
     pub name: String,
     pub kind: String,
     pub lines: [u32; 2],
-    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls: Option<Vec<String>>,
@@ -201,7 +203,7 @@ fn group_results(
                         name: s.symbol_name.clone().unwrap_or_default(),
                         kind: s.symbol_kind.clone().unwrap_or_default(),
                         lines: [s.start_line.unwrap_or(0), s.end_line.unwrap_or(0)],
-                        summary: s.summary.clone(),
+                        summary: Some(s.summary.clone()),
                         score: s.score,
                         calls: s.calls.clone(),
                         called_by: s.called_by.clone(),
@@ -212,7 +214,7 @@ fn group_results(
             FileResult {
                 path: file.file_path.clone(),
                 score: file.score,
-                summary: file.summary.clone(),
+                summary: Some(file.summary.clone()),
                 symbols,
             }
         })

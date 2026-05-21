@@ -245,7 +245,7 @@ async fn index_then_search_round_trip() {
     // Every result should have a path and summary
     for file_result in &result.results {
         assert!(!file_result.path.is_empty());
-        assert!(!file_result.summary.is_empty());
+        assert!(file_result.summary.is_some());
     }
 
     cleanup(&dir);

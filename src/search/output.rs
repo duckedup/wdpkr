@@ -10,7 +10,7 @@ use super::{FileResult, SearchReport, SymbolResult};
 
 /// Render the report as pretty-printed JSON. This is the default output
 /// format — agents parse it directly. When `terse`, summaries are
-/// truncated to the first sentence and symbols are omitted.
+/// removed but symbols and call graph data are kept.
 pub fn render_json(report: &SearchReport, terse: bool) -> Result<String> {
     if !terse {
         return Ok(serde_json::to_string_pretty(report)?);
@@ -25,8 +25,15 @@ pub fn render_json(report: &SearchReport, terse: bool) -> Result<String> {
             .map(|f| FileResult {
                 path: f.path.clone(),
                 score: f.score,
-                summary: first_sentence(&f.summary).to_string(),
-                symbols: vec![],
+                summary: None,
+                symbols: f
+                    .symbols
+                    .iter()
+                    .map(|s| SymbolResult {
+                        summary: None,
+                        ..s.clone()
+                    })
+                    .collect(),
             })
             .collect(),
     };
@@ -70,13 +77,6 @@ pub fn render_pretty(report: &SearchReport, terse: bool) -> String {
     out
 }
 
-fn first_sentence(s: &str) -> &str {
-    s.find(". ")
-        .or_else(|| s.find(".\n"))
-        .map(|i| &s[..=i])
-        .unwrap_or(s)
-}
-
 fn render_file_terse(out: &mut String, file: &FileResult) {
     let path_style = Style::new().cyan().bold();
     let path = file
@@ -85,9 +85,47 @@ fn render_file_terse(out: &mut String, file: &FileResult) {
     let ss = score_style(file.score);
     let score_text = format!("({:.2})", file.score);
     let score_display = score_text.if_supports_color(Stream::Stdout, |s| s.style(ss));
-    let summary = first_sentence(&file.summary);
-    let summary_display = summary.if_supports_color(Stream::Stdout, |s| s.dimmed());
-    writeln!(out, "{path} {score_display} — {summary_display}").unwrap();
+    writeln!(out, "{path} {score_display}").unwrap();
+
+    let count = file.symbols.len();
+    for (i, sym) in file.symbols.iter().enumerate() {
+        let is_last = i == count - 1;
+        render_symbol_terse(out, sym, is_last);
+    }
+}
+
+fn render_symbol_terse(out: &mut String, sym: &SymbolResult, is_last: bool) {
+    let branch = if is_last { "└─" } else { "├─" };
+    let cont = if is_last { "   " } else { "│  " };
+
+    let branch_display = branch.if_supports_color(Stream::Stdout, |s| s.dimmed());
+    let name_display = sym.name.if_supports_color(Stream::Stdout, |s| s.bold());
+
+    let ks = kind_style(&sym.kind);
+    let kind_display = sym.kind.if_supports_color(Stream::Stdout, |s| s.style(ks));
+    let line_range = format!("L{}-{}", sym.lines[0], sym.lines[1]);
+    let line_display = line_range.if_supports_color(Stream::Stdout, |s| s.dimmed());
+
+    writeln!(
+        out,
+        "  {branch_display} {name_display} ({kind_display}, {line_display})",
+    )
+    .unwrap();
+
+    if let Some(ref calls) = sym.calls
+        && !calls.is_empty()
+    {
+        let label = "calls:".if_supports_color(Stream::Stdout, |s| s.dimmed());
+        let refs = calls.join(", ");
+        writeln!(out, "  {cont}  {label} {refs}").unwrap();
+    }
+    if let Some(ref called_by) = sym.called_by
+        && !called_by.is_empty()
+    {
+        let label = "called_by:".if_supports_color(Stream::Stdout, |s| s.dimmed());
+        let refs = called_by.join(", ");
+        writeln!(out, "  {cont}  {label} {refs}").unwrap();
+    }
 }
 
 fn score_style(score: f32) -> Style {
@@ -120,13 +158,14 @@ fn render_file(out: &mut String, file: &FileResult) {
     let score_text = format!("({:.2})", file.score);
     let score_display = score_text.if_supports_color(Stream::Stdout, |s| s.style(ss));
     writeln!(out, "{path} {score_display}",).unwrap();
-    writeln!(
-        out,
-        "  {}",
-        file.summary
-            .if_supports_color(Stream::Stdout, |s| s.dimmed())
-    )
-    .unwrap();
+    if let Some(ref summary) = file.summary {
+        writeln!(
+            out,
+            "  {}",
+            summary.if_supports_color(Stream::Stdout, |s| s.dimmed())
+        )
+        .unwrap();
+    }
 
     let count = file.symbols.len();
     for (i, sym) in file.symbols.iter().enumerate() {
@@ -156,8 +195,9 @@ fn render_symbol(out: &mut String, sym: &SymbolResult, is_last: bool) {
         "  {branch_display} {name_display} ({kind_display}, {line_display}) {score_display}",
     )
     .unwrap();
-    writeln!(out, "  {cont}{}", sym.summary).unwrap();
-
+    if let Some(ref summary) = sym.summary {
+        writeln!(out, "  {cont}{summary}").unwrap();
+    }
     if let Some(ref calls) = sym.calls
         && !calls.is_empty()
     {
@@ -187,13 +227,13 @@ mod tests {
                 FileResult {
                     path: "src/finance/commission.rs".into(),
                     score: 0.87,
-                    summary: "Commission payment release service".into(),
+                    summary: Some("Commission payment release service".into()),
                     symbols: vec![
                         SymbolResult {
                             name: "release_payment".into(),
                             kind: "function".into(),
                             lines: [42, 78],
-                            summary: "Releases commission for a payee".into(),
+                            summary: Some("Releases commission for a payee".into()),
                             score: 0.91,
                             calls: None,
                             called_by: None,
@@ -202,7 +242,7 @@ mod tests {
                             name: "correct_amount".into(),
                             kind: "function".into(),
                             lines: [80, 95],
-                            summary: "Corrects commission amount".into(),
+                            summary: Some("Corrects commission amount".into()),
                             score: 0.83,
                             calls: None,
                             called_by: None,
@@ -212,12 +252,12 @@ mod tests {
                 FileResult {
                     path: "src/auth/login.rs".into(),
                     score: 0.72,
-                    summary: "Authentication and session management".into(),
+                    summary: Some("Authentication and session management".into()),
                     symbols: vec![SymbolResult {
                         name: "authenticate".into(),
                         kind: "function".into(),
                         lines: [10, 30],
-                        summary: "Authenticates a user".into(),
+                        summary: Some("Authenticates a user".into()),
                         score: 0.68,
                         calls: None,
                         called_by: None,
@@ -309,12 +349,12 @@ mod tests {
             results: vec![FileResult {
                 path: "a.rs".into(),
                 score: 0.5,
-                summary: "A file".into(),
+                summary: Some("A file".into()),
                 symbols: vec![SymbolResult {
                     name: "only_one".into(),
                     kind: "function".into(),
                     lines: [1, 10],
-                    summary: "The only symbol".into(),
+                    summary: Some("The only symbol".into()),
                     score: 0.4,
                     calls: None,
                     called_by: None,
@@ -327,46 +367,24 @@ mod tests {
     }
 
     #[test]
-    fn first_sentence_splits_on_period_space() {
-        assert_eq!(
-            first_sentence("Hello world. More text here."),
-            "Hello world."
-        );
-    }
-
-    #[test]
-    fn first_sentence_no_period_returns_all() {
-        assert_eq!(first_sentence("No period here"), "No period here");
-    }
-
-    #[test]
-    fn first_sentence_period_at_end_returns_all() {
-        assert_eq!(first_sentence("Ends with period."), "Ends with period.");
-    }
-
-    #[test]
-    fn first_sentence_empty_string() {
-        assert_eq!(first_sentence(""), "");
-    }
-
-    #[test]
-    fn terse_pretty_one_line_per_file() {
+    fn terse_pretty_keeps_symbols_drops_summaries() {
         let report = sample_report();
         let out = render_pretty(&report, true);
-        // Should not contain tree characters (no symbols)
-        assert!(!out.contains("├─"));
-        assert!(!out.contains("└─"));
-        // Should contain file paths
         assert!(out.contains("src/finance/commission.rs"));
-        assert!(out.contains("src/auth/login.rs"));
-        // Should contain the em-dash separator
-        assert!(out.contains("—"));
-        // Should NOT contain "indexed at" header
+        assert!(out.contains("release_payment"), "should keep symbols");
+        assert!(
+            !out.contains("Commission payment release service"),
+            "should drop file summaries"
+        );
+        assert!(
+            !out.contains("Releases commission for a payee"),
+            "should drop symbol summaries"
+        );
         assert!(!out.contains("indexed at"));
     }
 
     #[test]
-    fn terse_json_truncates_summaries() {
+    fn terse_json_drops_summaries_keeps_symbols() {
         let report = SearchReport {
             query: "test".into(),
             namespace: "test".into(),
@@ -374,23 +392,25 @@ mod tests {
             results: vec![FileResult {
                 path: "a.rs".into(),
                 score: 0.9,
-                summary: "First sentence. Second sentence. Third.".into(),
+                summary: Some("File summary here.".into()),
                 symbols: vec![SymbolResult {
                     name: "func".into(),
                     kind: "function".into(),
                     lines: [1, 10],
-                    summary: "A function".into(),
+                    summary: Some("A function".into()),
                     score: 0.8,
-                    calls: None,
+                    calls: Some(vec!["b.rs:helper".into()]),
                     called_by: None,
                 }],
             }],
         };
         let json_str = render_json(&report, true).unwrap();
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let summary = json["results"][0]["summary"].as_str().unwrap();
-        assert_eq!(summary, "First sentence.");
-        // Symbols should be empty in terse mode
-        assert!(json["results"][0]["symbols"].as_array().unwrap().is_empty());
+        assert!(json["results"][0]["summary"].is_null());
+        let syms = json["results"][0]["symbols"].as_array().unwrap();
+        assert_eq!(syms.len(), 1, "should keep symbols");
+        assert_eq!(syms[0]["name"], "func");
+        assert!(syms[0]["summary"].is_null(), "should drop symbol summary");
+        assert_eq!(syms[0]["calls"][0], "b.rs:helper", "should keep calls");
     }
 }
