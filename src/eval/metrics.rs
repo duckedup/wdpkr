@@ -122,7 +122,7 @@ mod tests {
             results: vec![FileResult {
                 path: "a.rs".into(),
                 score: 0.9,
-                summary: "A file summary".into(),
+                summary: Some("A file summary".into()),
                 symbols: vec![],
             }],
         };
@@ -196,13 +196,15 @@ mod tests {
             results: vec![FileResult {
                 path: "a.rs".into(),
                 score: 0.9,
-                summary: "Module summary".into(),
+                summary: Some("Module summary".into()),
                 symbols: vec![SymbolResult {
                     name: "foo".into(),
                     kind: "function".into(),
                     lines: [1, 20],
-                    summary: "Does foo things".into(),
+                    summary: Some("Does foo things".into()),
                     score: 0.85,
+                    calls: None,
+                    called_by: None,
                 }],
             }],
         };

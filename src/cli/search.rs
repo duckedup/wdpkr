@@ -54,7 +54,7 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         query: args.query.clone(),
         top_k: args.top_k,
         symbols_per_file: args.symbols_per_file,
-        no_symbols: args.no_symbols || args.terse,
+        no_symbols: args.no_symbols,
         scope: args.scope.clone(),
         filters: args.filter.clone(),
     };
