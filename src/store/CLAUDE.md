@@ -10,6 +10,10 @@ All Turbopuffer requests MUST use the v2 API (`/v2/namespaces/{ns}`). Do NOT use
 - **Column-oriented payloads** are v1. v2 uses row-oriented `upsert_rows` (array of `HashMap<String, Value>`).
 - **`top_k`** in query body is v1. v2 uses `limit`.
 
+### Schema-safe attribute requests
+
+Requesting a specific attribute name that doesn't exist in the namespace schema returns a 400 error. This happens when querying indexes built before a new field was added (e.g., `calls`/`called_by` on older indexes). Use `include_attributes: true` when you need all attributes and can't guarantee the schema has every column.
+
 ### v2 query patterns
 
 ```rust

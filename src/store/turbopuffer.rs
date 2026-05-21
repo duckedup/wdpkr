@@ -287,20 +287,7 @@ impl VectorStore for TurbopufferStore {
         let url = format!("{}/query", self.ns_url(ns));
         let body = QueryRequest {
             filters: Some(serde_json::json!(["id", "NotEq", META_VECTOR_ID])),
-            include_attributes: Some(serde_json::json!([
-                "vector",
-                "file_path",
-                "chunk_kind",
-                "summary",
-                "symbol_name",
-                "symbol_kind",
-                "start_line",
-                "end_line",
-                "language",
-                "content_hash",
-                "calls",
-                "called_by"
-            ])),
+            include_attributes: Some(serde_json::json!(true)),
             limit: Some(10_000),
             ..Default::default()
         };
