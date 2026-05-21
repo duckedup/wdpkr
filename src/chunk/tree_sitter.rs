@@ -38,14 +38,7 @@ impl Chunker for TreeSitterChunker {
                     .map_err(|e| anyhow::anyhow!("failed to set language for {language}: {e}"))?;
 
                 match parser.parse(content, None) {
-                    Some(tree) => {
-                        if tree.root_node().has_error() {
-                            eprintln!(
-                                "warning: parse errors in {file_path}, extracting what we can"
-                            );
-                        }
-                        extract_all(&tree.root_node(), content, &cfg)
-                    }
+                    Some(tree) => extract_all(&tree.root_node(), content, &cfg),
                     None => {
                         eprintln!("warning: tree-sitter failed to parse {file_path}");
                         (vec![], vec![])
