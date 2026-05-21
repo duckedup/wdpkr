@@ -52,6 +52,10 @@ pub struct SymbolResult {
     pub lines: [u32; 2],
     pub summary: String,
     pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calls: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub called_by: Option<Vec<String>>,
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────
@@ -199,6 +203,8 @@ fn group_results(
                         lines: [s.start_line.unwrap_or(0), s.end_line.unwrap_or(0)],
                         summary: s.summary.clone(),
                         score: s.score,
+                        calls: s.calls.clone(),
+                        called_by: s.called_by.clone(),
                     })
                     .collect()
             };

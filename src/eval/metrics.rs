@@ -203,6 +203,8 @@ mod tests {
                     lines: [1, 20],
                     summary: "Does foo things".into(),
                     score: 0.85,
+                    calls: None,
+                    called_by: None,
                 }],
             }],
         };

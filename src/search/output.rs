@@ -157,6 +157,21 @@ fn render_symbol(out: &mut String, sym: &SymbolResult, is_last: bool) {
     )
     .unwrap();
     writeln!(out, "  {cont}{}", sym.summary).unwrap();
+
+    if let Some(ref calls) = sym.calls
+        && !calls.is_empty()
+    {
+        let label = "calls:".if_supports_color(Stream::Stdout, |s| s.dimmed());
+        let refs = calls.join(", ");
+        writeln!(out, "  {cont}  {label} {refs}").unwrap();
+    }
+    if let Some(ref called_by) = sym.called_by
+        && !called_by.is_empty()
+    {
+        let label = "called_by:".if_supports_color(Stream::Stdout, |s| s.dimmed());
+        let refs = called_by.join(", ");
+        writeln!(out, "  {cont}  {label} {refs}").unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -180,6 +195,8 @@ mod tests {
                             lines: [42, 78],
                             summary: "Releases commission for a payee".into(),
                             score: 0.91,
+                            calls: None,
+                            called_by: None,
                         },
                         SymbolResult {
                             name: "correct_amount".into(),
@@ -187,6 +204,8 @@ mod tests {
                             lines: [80, 95],
                             summary: "Corrects commission amount".into(),
                             score: 0.83,
+                            calls: None,
+                            called_by: None,
                         },
                     ],
                 },
@@ -200,6 +219,8 @@ mod tests {
                         lines: [10, 30],
                         summary: "Authenticates a user".into(),
                         score: 0.68,
+                        calls: None,
+                        called_by: None,
                     }],
                 },
             ],
@@ -295,6 +316,8 @@ mod tests {
                     lines: [1, 10],
                     summary: "The only symbol".into(),
                     score: 0.4,
+                    calls: None,
+                    called_by: None,
                 }],
             }],
         };
@@ -358,6 +381,8 @@ mod tests {
                     lines: [1, 10],
                     summary: "A function".into(),
                     score: 0.8,
+                    calls: None,
+                    called_by: None,
                 }],
             }],
         };
