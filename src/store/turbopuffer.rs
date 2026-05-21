@@ -260,7 +260,6 @@ impl VectorStore for TurbopufferStore {
             ])),
             include_attributes: Some(serde_json::json!(["file_path", "content_hash"])),
             limit: Some(10_000),
-            include_vectors: Some(false),
             ..Default::default()
         };
 
@@ -288,8 +287,20 @@ impl VectorStore for TurbopufferStore {
         let url = format!("{}/query", self.ns_url(ns));
         let body = QueryRequest {
             filters: Some(serde_json::json!(["id", "NotEq", META_VECTOR_ID])),
-            include_attributes: Some(serde_json::json!(true)),
-            include_vectors: Some(true),
+            include_attributes: Some(serde_json::json!([
+                "vector",
+                "file_path",
+                "chunk_kind",
+                "summary",
+                "symbol_name",
+                "symbol_kind",
+                "start_line",
+                "end_line",
+                "language",
+                "content_hash",
+                "calls",
+                "called_by"
+            ])),
             limit: Some(10_000),
             ..Default::default()
         };
@@ -595,8 +606,6 @@ struct QueryRequest {
     include_attributes: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     aggregate_by: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    include_vectors: Option<bool>,
 }
 
 #[derive(Deserialize)]
