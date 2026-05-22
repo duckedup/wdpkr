@@ -43,6 +43,8 @@ pub struct FileResult {
     pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub symbols: Vec<SymbolResult>,
 }
 
@@ -65,10 +67,11 @@ pub struct SymbolResult {
 pub struct SearchRun {
     embedder: Box<dyn Embedder>,
     store: Box<dyn VectorStore>,
-    namespace: Namespace,
+    namespaces: Vec<(Namespace, Option<String>)>,
 }
 
 impl SearchRun {
+    /// Single-namespace constructor (backward compat).
     pub fn new(
         embedder: Box<dyn Embedder>,
         store: Box<dyn VectorStore>,
@@ -77,33 +80,27 @@ impl SearchRun {
         Self {
             embedder,
             store,
-            namespace,
+            namespaces: vec![(namespace, None)],
+        }
+    }
+
+    /// Multi-namespace constructor. Each entry is (namespace, source_label).
+    /// The source label is `None` for the files plugin (omitted from JSON)
+    /// and `Some("linear")` etc. for external plugins.
+    pub fn new_multi(
+        embedder: Box<dyn Embedder>,
+        store: Box<dyn VectorStore>,
+        namespaces: Vec<(Namespace, Option<String>)>,
+    ) -> Self {
+        Self {
+            embedder,
+            store,
+            namespaces,
         }
     }
 
     pub async fn run(&self, params: &SearchParams) -> Result<SearchReport> {
-        // 1. Verify namespace exists
-        if !self.store.namespace_exists(&self.namespace).await? {
-            bail!(
-                "index not found for namespace '{}'; run `wdpkr index` first",
-                self.namespace.as_str()
-            );
-        }
-
-        // 2. Read metadata for HWM + embedder mismatch check
-        let meta = self.store.get_metadata(&self.namespace).await?;
-        if let Some(ref stored_embedder) = meta.embedder {
-            let current = embedder_identity(self.embedder.as_ref());
-            if stored_embedder != &current {
-                bail!(
-                    "embedder mismatch: index was built with {stored_embedder}, \
-                     but search is configured for {current}; \
-                     run `wdpkr index --full` to reindex or change your embedder config"
-                );
-            }
-        }
-
-        // 3. Compile glob filters (fail fast before any API calls)
+        // 1. Compile glob filters (fail fast before any API calls)
         let glob_set = if params.filters.is_empty() {
             None
         } else {
@@ -121,33 +118,73 @@ impl SearchRun {
             )
         };
 
-        // 4. Embed the query
+        // 2. Embed the query once
         let query_vector = self.embedder.embed(&params.query).await?;
 
-        // 5. Over-fetch from the store so we have both file-level and
-        //    symbol-level results to group. Factor of 3 is the starting
-        //    heuristic per SPEC; tunable via eval.
+        // 3. Search each namespace, collecting tagged results
         let over_fetch = params.top_k * (params.symbols_per_file + 1) * 3;
-        let all_results = self
-            .store
-            .search(
-                &self.namespace,
-                &query_vector,
-                &SearchOptions {
-                    top_k: over_fetch,
-                    path_prefixes: params.scope.clone(),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        let mut all_results: Vec<(SearchResult, Option<String>)> = Vec::new();
+        let mut primary_namespace = String::new();
+        let mut primary_indexed_at: Option<String> = None;
+        let mut any_namespace_found = false;
 
-        // 6. Group into file → symbols tiered structure
-        let results = group_results(&all_results, params, glob_set.as_ref());
+        for (ns, source) in &self.namespaces {
+            if !self.store.namespace_exists(ns).await? {
+                continue;
+            }
+            any_namespace_found = true;
+
+            let meta = self.store.get_metadata(ns).await?;
+            if let Some(ref stored_embedder) = meta.embedder {
+                let current = embedder_identity(self.embedder.as_ref());
+                if stored_embedder != &current {
+                    bail!(
+                        "embedder mismatch: index was built with {stored_embedder}, \
+                         but search is configured for {current}; \
+                         run `wdpkr index --full` to reindex or change your embedder config"
+                    );
+                }
+            }
+
+            if primary_namespace.is_empty() {
+                primary_namespace = ns.as_str().to_string();
+                primary_indexed_at = meta.hwm_sha;
+            }
+
+            let ns_results = self
+                .store
+                .search(
+                    ns,
+                    &query_vector,
+                    &SearchOptions {
+                        top_k: over_fetch,
+                        path_prefixes: params.scope.clone(),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+
+            for r in ns_results {
+                all_results.push((r, source.clone()));
+            }
+        }
+
+        if !any_namespace_found {
+            let ns_name = self
+                .namespaces
+                .first()
+                .map(|(ns, _)| ns.as_str().to_string())
+                .unwrap_or_default();
+            bail!("index not found for namespace '{ns_name}'; run `wdpkr index` first");
+        }
+
+        // 4. Group into file → symbols tiered structure
+        let results = group_results_multi(&all_results, params, glob_set.as_ref());
 
         Ok(SearchReport {
             query: params.query.clone(),
-            namespace: self.namespace.as_str().to_string(),
-            indexed_at: meta.hwm_sha,
+            namespace: primary_namespace,
+            indexed_at: primary_indexed_at,
             results,
         })
     }
@@ -155,21 +192,20 @@ impl SearchRun {
 
 /// Group flat search results into a tiered file → symbols structure.
 ///
-/// 1. Separate into file-level and symbol-level results.
-/// 2. Take the top `top_k` files (already score-sorted from the store).
-/// 3. For each file, attach the top `symbols_per_file` symbol results
-///    that share the same `file_path`.
-fn group_results(
-    results: &[SearchResult],
+/// Results carry an optional source label (plugin name). For the files
+/// plugin this is `None` (omitted from JSON); for external plugins it's
+/// `Some("linear")` etc.
+fn group_results_multi(
+    results: &[(SearchResult, Option<String>)],
     params: &SearchParams,
     glob_set: Option<&globset::GlobSet>,
 ) -> Vec<FileResult> {
-    let mut file_results: Vec<&SearchResult> = Vec::new();
+    let mut file_results: Vec<(&SearchResult, Option<&String>)> = Vec::new();
     let mut symbols_by_file: HashMap<&str, Vec<&SearchResult>> = HashMap::new();
 
-    for r in results {
+    for (r, source) in results {
         match r.chunk_kind {
-            ChunkKind::File => file_results.push(r),
+            ChunkKind::File => file_results.push((r, source.as_ref())),
             ChunkKind::Symbol => {
                 symbols_by_file
                     .entry(r.file_path.as_str())
@@ -180,15 +216,16 @@ fn group_results(
     }
 
     if let Some(gs) = glob_set {
-        file_results.retain(|r| gs.is_match(&r.file_path));
+        file_results.retain(|(r, _)| gs.is_match(&r.file_path));
     }
 
-    // Files arrive sorted by score from the store; truncate to top_k.
+    // Re-sort by score descending across all namespaces.
+    file_results.sort_by(|(a, _), (b, _)| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
     file_results.truncate(params.top_k);
 
     file_results
         .iter()
-        .map(|file| {
+        .map(|(file, source)| {
             let symbols = if params.no_symbols {
                 vec![]
             } else {
@@ -215,6 +252,7 @@ fn group_results(
                 path: file.file_path.clone(),
                 score: file.score,
                 summary: Some(file.summary.clone()),
+                source: source.cloned(),
                 symbols,
             }
         })
@@ -718,5 +756,179 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("--filter"));
+    }
+
+    // ── Multi-namespace search tests ────────────────────────────────
+
+    async fn seeded_multi_store() -> MockVectorStore {
+        let store = seeded_store().await;
+        store
+            .create_namespace(&Namespace::from("test--linear"), 3)
+            .await
+            .unwrap();
+        let linear_docs = vec![VectorDocument {
+            id: "f-linear-eng1".into(),
+            vector: vec![0.95, 0.05, 0.0],
+            summary: "Fix commission calculation bug".into(),
+            file_path: "linear://ENG-1".into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: None,
+            content_hash: None,
+            calls: None,
+            called_by: None,
+        }];
+        store
+            .upsert(&Namespace::from("test--linear"), &linear_docs)
+            .await
+            .unwrap();
+        store
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn multi_namespace_merges_by_score() {
+        let store = seeded_multi_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new_multi(
+            Box::new(embedder),
+            Box::new(store),
+            vec![
+                (Namespace::from("test"), None),
+                (Namespace::from("test--linear"), Some("linear".into())),
+            ],
+        );
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert!(report.results.len() >= 2);
+        let linear_result = report.results.iter().find(|r| r.path == "linear://ENG-1");
+        assert!(linear_result.is_some(), "should include linear results");
+        assert_eq!(
+            linear_result.unwrap().source.as_deref(),
+            Some("linear"),
+            "linear results should have source label"
+        );
+
+        let files_result = report
+            .results
+            .iter()
+            .find(|r| r.path == "src/finance/commission.rs");
+        assert!(files_result.is_some());
+        assert!(
+            files_result.unwrap().source.is_none(),
+            "files results should have no source label"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn multi_namespace_missing_namespace_skipped() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new_multi(
+            Box::new(embedder),
+            Box::new(store),
+            vec![
+                (Namespace::from("test"), None),
+                (Namespace::from("test--never-indexed"), Some("never".into())),
+            ],
+        );
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert!(!report.results.is_empty());
+        assert!(
+            report
+                .results
+                .iter()
+                .all(|r| r.source.as_deref() != Some("never")),
+            "never-indexed namespace should be skipped"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn source_field_omitted_in_json_when_none() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"));
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 1,
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(
+            json["results"][0].get("source").is_none(),
+            "source field should be omitted when None"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn source_field_present_in_json_when_set() {
+        let store = seeded_multi_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new_multi(
+            Box::new(embedder),
+            Box::new(store),
+            vec![
+                (Namespace::from("test"), None),
+                (Namespace::from("test--linear"), Some("linear".into())),
+            ],
+        );
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        let json = serde_json::to_value(&report).unwrap();
+        let linear = json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["path"] == "linear://ENG-1");
+        assert!(linear.is_some());
+        assert_eq!(linear.unwrap()["source"], "linear");
     }
 }

@@ -4,9 +4,10 @@ use clap::Args;
 use crate::config::Config;
 use crate::embed::build_embedder;
 use crate::indexer::resolve_namespace;
+use crate::plugin::namespace_suffix;
 use crate::search::output;
 use crate::search::{SearchParams, SearchRun};
-use crate::store::build_store;
+use crate::store::{Namespace, build_store};
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
@@ -59,7 +60,24 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         filters: args.filter.clone(),
     };
 
-    let search = SearchRun::new(embedder, store, namespace);
+    let namespaces: Vec<(Namespace, Option<String>)> = config
+        .plugins
+        .iter()
+        .map(|p| {
+            let ns = match namespace_suffix(&p.name) {
+                None => namespace.clone(),
+                Some(suffix) => Namespace::from(format!("{}{suffix}", namespace.as_str())),
+            };
+            let source = if p.name == "files" {
+                None
+            } else {
+                Some(p.name.clone())
+            };
+            (ns, source)
+        })
+        .collect();
+
+    let search = SearchRun::new_multi(embedder, store, namespaces);
     let report = search.run(&params).await?;
 
     let rendered = if args.pretty {
