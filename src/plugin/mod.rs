@@ -43,6 +43,7 @@ pub struct FetchContext {
 }
 
 /// Output from [`Plugin::fetch`].
+#[derive(Debug)]
 pub struct FetchResult {
     /// Items to process through the shared pipeline.
     pub items: Vec<SourceItem>,
@@ -114,12 +115,12 @@ pub fn build_plugin(
     root: std::path::PathBuf,
 ) -> Result<std::sync::Arc<dyn Plugin>> {
     if let Some(ref command) = cfg.command {
-        let _ = command;
-        anyhow::bail!(
-            "subprocess plugins are not yet implemented (plugin '{}' specifies command '{}')",
-            cfg.name,
-            command
-        );
+        return Ok(std::sync::Arc::new(process::ProcessPlugin::new(
+            cfg.name.clone(),
+            command.clone(),
+            cfg.args.clone(),
+            cfg.settings.clone(),
+        )));
     }
     match cfg.name.as_str() {
         "files" => Ok(std::sync::Arc::new(files::FilesPlugin::new(root))),
@@ -372,19 +373,15 @@ mod tests {
     }
 
     #[test]
-    fn build_plugin_subprocess_errors_not_yet() {
+    fn build_plugin_subprocess_creates_process_plugin() {
         let cfg = PluginConfig {
             name: "custom".into(),
             command: Some("/usr/bin/custom".into()),
-            args: vec![],
+            args: vec!["--flag".into()],
             settings: HashMap::new(),
         };
-        let result = build_plugin(&cfg, std::path::PathBuf::from("."));
-        let err = result.err().expect("should error");
-        assert!(
-            err.to_string().contains("not yet implemented"),
-            "got: {err}"
-        );
+        let plugin = build_plugin(&cfg, std::path::PathBuf::from(".")).unwrap();
+        assert_eq!(plugin.name(), "custom");
     }
 
     #[test]
