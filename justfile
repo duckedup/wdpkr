@@ -102,6 +102,12 @@ package: release-all
 install:
     cargo install --path .
 
+# Initialize beads issue tracking for this project
+bd-init:
+    bd init --reinit-local --prefix wdpkr
+    git config beads.role contributor
+    chmod 700 .beads
+
 # Remove all build artifacts
 clean:
     cargo clean

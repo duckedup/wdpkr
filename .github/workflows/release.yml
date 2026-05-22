@@ -173,6 +173,8 @@ jobs:
             --notes "## wdpkr ${{ needs.check-version.outputs.version }}
 
           \`\`\`sh
+          cargo binstall wdpkr
+          # or
           cargo install wdpkr@${{ needs.check-version.outputs.version }}
           \`\`\`
 

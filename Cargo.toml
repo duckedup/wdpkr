@@ -1,9 +1,10 @@
 [package]
 name = "wdpkr"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.95"
 description = "Codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
+repository = "https://github.com/duckedup/wdpkr"
 license = "MIT"
 
 [lib]
