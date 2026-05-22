@@ -192,7 +192,7 @@ printf '%s' '{}'
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn nonzero_exit_code_errors() {
-        let tap = make_tap("sh", vec!["-c".into(), "exit 1".into()]);
+        let tap = make_tap("sh", vec!["-c".into(), "cat >/dev/null; exit 1".into()]);
         let err = tap.fetch(&default_ctx()).await.unwrap_err();
         assert!(err.to_string().contains("exited with code 1"), "got: {err}");
     }
