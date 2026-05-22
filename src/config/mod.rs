@@ -31,6 +31,7 @@
 
 mod embed;
 mod indexer;
+pub mod plugin;
 mod store;
 mod summarizer;
 
@@ -39,6 +40,7 @@ pub(crate) mod test_helpers;
 
 pub use embed::{EmbedConfig, EmbedSources};
 pub use indexer::{IndexerConfig, IndexerSources};
+pub use plugin::{FilePluginConfig, PluginConfig, PluginsSources};
 pub use store::{StoreConfig, StoreSources};
 pub use summarizer::{SummarizerConfig, SummarizerSources};
 
@@ -146,6 +148,7 @@ pub struct Config {
     pub embed: EmbedConfig,
     pub summarizer: SummarizerConfig,
     pub indexer: IndexerConfig,
+    pub plugins: Vec<PluginConfig>,
 }
 
 /// Per-field source attribution paralleling [`Config`].
@@ -154,6 +157,7 @@ pub struct ConfigSources {
     pub embed: EmbedSources,
     pub summarizer: SummarizerSources,
     pub indexer: IndexerSources,
+    pub plugins: PluginsSources,
 }
 
 /// Values + sources, returned by [`ResolvedConfig::new`].
@@ -204,18 +208,21 @@ impl ResolvedConfig {
         let (embed, embed_sources) = EmbedConfig::resolve(&file);
         let (summarizer, summarizer_sources) = SummarizerConfig::resolve(&file);
         let (indexer, indexer_sources) = IndexerConfig::resolve(&file);
+        let (plugins, plugins_sources) = plugin::resolve(&file);
         Self {
             config: Config {
                 store,
                 embed,
                 summarizer,
                 indexer,
+                plugins,
             },
             sources: ConfigSources {
                 store: store_sources,
                 embed: embed_sources,
                 summarizer: summarizer_sources,
                 indexer: indexer_sources,
+                plugins: plugins_sources,
             },
         }
     }
@@ -295,6 +302,16 @@ impl ResolvedConfig {
                 value: c.indexer.hwm_success_threshold.to_string(),
                 source: s.indexer.hwm_success_threshold.clone(),
             },
+            ConfigEntry {
+                key: "plugins",
+                value: c
+                    .plugins
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                source: s.plugins.source.clone(),
+            },
         ]
     }
 
@@ -318,6 +335,8 @@ pub struct FileConfig {
     pub summarizer: Option<FileSummarizerConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexer: Option<FileIndexerConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<FilePluginConfig>>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]

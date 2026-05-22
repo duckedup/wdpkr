@@ -4,6 +4,7 @@ pub mod config;
 pub mod embed;
 pub mod eval;
 pub mod indexer;
+pub mod plugin;
 pub mod search;
 pub mod store;
 pub mod summarize;

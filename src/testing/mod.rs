@@ -15,6 +15,7 @@
 //!   vectors for reproducible search tests.
 
 pub mod mock_embed;
+pub mod mock_plugin;
 pub mod mock_store;
 pub mod mock_summarize;
 

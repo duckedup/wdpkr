@@ -5,11 +5,11 @@ use clap::Args;
 
 use owo_colors::{OwoColorize, Stream};
 
-use crate::chunk::tree_sitter::TreeSitterChunker;
 use crate::config::Config;
 use crate::embed::build_embedder;
 use crate::indexer::cost::{self, ProviderRates};
 use crate::indexer::{IndexRun, resolve_namespace};
+use crate::plugin::build_plugins;
 use crate::store::build_store;
 use crate::summarize::anthropic::build_summarizer;
 
@@ -39,6 +39,10 @@ pub struct IndexArgs {
     /// or re-embedding. Zero API calls — uses existing vectors from the store.
     #[arg(long)]
     pub skip_summaries: bool,
+
+    /// Run only this configured plugin (default: all)
+    #[arg(long)]
+    pub plugin: Option<String>,
 }
 
 pub async fn run(args: IndexArgs) -> Result<()> {
@@ -60,7 +64,6 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     config.summarizer.validate()?;
 
     let namespace = resolve_namespace(&config)?;
-    let chunker: Arc<dyn crate::chunk::Chunker> = Arc::new(TreeSitterChunker::new());
     let summarizer = build_summarizer(&config.summarizer)?;
     let embedder = build_embedder(&config.embed).await?;
     let store = build_store(&config.store, embedder.dimension())?;
@@ -75,15 +78,16 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     );
 
     let root = std::env::current_dir()?;
+    let plugins = build_plugins(&config.plugins, root, args.plugin.as_deref())?;
     let index_run = IndexRun::new(
-        chunker,
+        plugins,
         Arc::from(summarizer),
         Arc::from(embedder),
         Arc::from(store),
         namespace,
         args.concurrency,
     );
-    let report = index_run.run(args.full, &root).await?;
+    let report = index_run.run(args.full).await?;
 
     let elapsed = format!("{:.1}s", report.elapsed.as_secs_f64());
     eprintln!(
@@ -210,6 +214,8 @@ async fn run_skip_summaries(config: &Config) -> Result<()> {
 }
 
 async fn run_dry_run(config: &Config) -> Result<()> {
+    use crate::chunk::tree_sitter::TreeSitterChunker;
+
     let root = std::env::current_dir()?;
     let chunker = TreeSitterChunker::new();
 

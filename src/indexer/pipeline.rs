@@ -1,11 +1,12 @@
-//! Per-file indexing pipeline: chunk → summarize → embed → build VectorDocuments.
+//! Indexing pipeline: summarize → embed → build VectorDocuments.
 
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::chunk::{Chunker, detect_language};
+use crate::chunk::SymbolChunk;
 use crate::embed::Embedder;
+use crate::plugin::SourceItem;
 use crate::store::{ChunkKind, VectorDocument};
 use crate::summarize::rollup::{DEFAULT_TOKEN_THRESHOLD, summarize_file_and_symbols};
 use crate::summarize::{FileSummaryInput, Summarizer};
@@ -24,83 +25,89 @@ pub struct PipelineTiming {
     pub embed: Duration,
 }
 
-/// Process a single file through the full indexing pipeline.
-pub async fn process_file(
-    file_path: &str,
-    content: &str,
-    chunker: &dyn Chunker,
+/// Process a [`SourceItem`] (already chunked by a plugin) through the
+/// summarize → embed → build VectorDocuments pipeline.
+pub async fn process_item(
+    item: &SourceItem,
     summarizer: &dyn Summarizer,
     embedder: &dyn Embedder,
 ) -> Result<PipelineResult> {
-    let language = detect_language(file_path).unwrap_or("unknown");
-    let content_hash = blake3::hash(content.as_bytes()).to_hex()[..16].to_string();
+    let language = item.language.as_deref().unwrap_or("unknown");
 
-    // Chunk
-    let t0 = Instant::now();
-    let chunks = chunker.chunk(file_path, content, language)?;
-    let chunk_time = t0.elapsed();
-    let symbol_count = chunks.symbols.len();
+    let symbols: Vec<SymbolChunk> = item
+        .children
+        .iter()
+        .map(|c| SymbolChunk {
+            name: c.name.clone(),
+            kind: c.kind.clone(),
+            body: c.content.clone(),
+            signature: c.signature.clone(),
+            doc_comment: None,
+            start_line: c.start_line.unwrap_or(0),
+            end_line: c.end_line.unwrap_or(0),
+            references: c.references.clone(),
+        })
+        .collect();
 
-    // Summarize
+    let symbol_count = symbols.len();
+
     let t1 = Instant::now();
     let file_input = FileSummaryInput {
-        file_path: file_path.to_string(),
-        content: content.to_string(),
-        imports: chunks.imports.clone(),
+        file_path: item.source_path.clone(),
+        content: item.content.clone(),
+        imports: vec![],
         language: language.to_string(),
     };
 
-    let summary_result = summarize_file_and_symbols(
-        summarizer,
-        &file_input,
-        &chunks.symbols,
-        DEFAULT_TOKEN_THRESHOLD,
-    )
-    .await?;
+    let summary_result =
+        summarize_file_and_symbols(summarizer, &file_input, &symbols, DEFAULT_TOKEN_THRESHOLD)
+            .await?;
     let summarize_time = t1.elapsed();
 
-    // Embed
     let t2 = Instant::now();
     let mut documents = Vec::new();
 
-    // File-level document
     let file_embedding = embedder.embed(&summary_result.file_summary).await?;
     documents.push(VectorDocument {
-        id: document_id(file_path, ChunkKind::File, None, content),
+        id: document_id(&item.source_path, ChunkKind::File, None, &item.content),
         vector: file_embedding,
         summary: summary_result.file_summary.clone(),
-        file_path: file_path.to_string(),
+        file_path: item.source_path.clone(),
         chunk_kind: ChunkKind::File,
         symbol_name: None,
         symbol_kind: None,
         start_line: None,
         end_line: None,
         language: Some(language.to_string()),
-        content_hash: Some(content_hash.clone()),
+        content_hash: Some(item.content_hash.clone()),
         calls: None,
         called_by: None,
     });
 
-    // Symbol-level documents
-    for (sym, sym_result) in chunks
-        .symbols
+    for (child, sym_result) in item
+        .children
         .iter()
         .zip(summary_result.symbol_summaries.iter())
     {
         let embedding = embedder.embed(&sym_result.summary).await?;
         documents.push(VectorDocument {
-            id: document_id(file_path, ChunkKind::Symbol, Some(&sym.name), &sym.body),
+            id: document_id(
+                &item.source_path,
+                ChunkKind::Symbol,
+                Some(&child.name),
+                &child.content,
+            ),
             vector: embedding,
             summary: sym_result.summary.clone(),
-            file_path: file_path.to_string(),
+            file_path: item.source_path.clone(),
             chunk_kind: ChunkKind::Symbol,
-            symbol_name: Some(sym.name.clone()),
-            symbol_kind: Some(sym.kind.clone()),
-            start_line: Some(sym.start_line),
-            end_line: Some(sym.end_line),
+            symbol_name: Some(child.name.clone()),
+            symbol_kind: Some(child.kind.clone()),
+            start_line: child.start_line,
+            end_line: child.end_line,
             language: Some(language.to_string()),
             content_hash: None,
-            calls: Some(sym.references.clone()),
+            calls: Some(child.references.clone()),
             called_by: None,
         });
     }
@@ -109,12 +116,12 @@ pub async fn process_file(
     Ok(PipelineResult {
         documents,
         timing: PipelineTiming {
-            chunk: chunk_time,
+            chunk: Duration::ZERO,
             summarize: summarize_time,
             embed: embed_time,
         },
         symbol_count,
-        content_hash,
+        content_hash: item.content_hash.clone(),
     })
 }
 
@@ -140,7 +147,7 @@ pub fn document_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk::tree_sitter::TreeSitterChunker;
+    use crate::plugin::SourceChunk;
     use crate::testing::mock_embed::MockEmbedder;
     use crate::testing::mock_summarize::MockSummarizer;
 
@@ -172,116 +179,159 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn process_rust_file() {
-        let chunker = TreeSitterChunker::new();
-        let summarizer = MockSummarizer::new();
-        let embedder = MockEmbedder::new(8);
-
-        let content = r#"
-use std::io;
-
-pub fn hello() {
-    println!("hi");
-}
-
-pub fn goodbye() {
-    println!("bye");
-}
-"#;
-        let result = process_file("src/greet.rs", content, &chunker, &summarizer, &embedder)
-            .await
-            .unwrap();
-
-        // Should have: 1 file-level + 2 symbol-level documents
-        assert!(
-            result.documents.len() >= 2,
-            "expected at least 2 docs, got {}",
-            result.documents.len()
-        );
-
-        let file_doc = result
-            .documents
-            .iter()
-            .find(|d| d.chunk_kind == ChunkKind::File)
-            .expect("should have a file-level document");
-        assert_eq!(file_doc.file_path, "src/greet.rs");
-        assert_eq!(file_doc.language.as_deref(), Some("rust"));
-        assert!(!file_doc.summary.is_empty());
-        assert_eq!(file_doc.vector.len(), 8);
-
-        let symbol_docs: Vec<_> = result
-            .documents
-            .iter()
-            .filter(|d| d.chunk_kind == ChunkKind::Symbol)
-            .collect();
-        assert!(!symbol_docs.is_empty());
-        for sym in &symbol_docs {
-            assert!(sym.symbol_name.is_some());
-            assert!(sym.start_line.is_some());
+    fn sample_source_item() -> SourceItem {
+        SourceItem {
+            source_path: "src/main.rs".into(),
+            content: "pub fn hello() {}\npub fn world() {}".into(),
+            content_hash: "abc123".into(),
+            language: Some("rust".into()),
+            children: vec![
+                SourceChunk {
+                    name: "hello".into(),
+                    kind: "function".into(),
+                    content: "pub fn hello() {}".into(),
+                    signature: Some("pub fn hello()".into()),
+                    start_line: Some(1),
+                    end_line: Some(1),
+                    references: vec!["println".into()],
+                },
+                SourceChunk {
+                    name: "world".into(),
+                    kind: "function".into(),
+                    content: "pub fn world() {}".into(),
+                    signature: Some("pub fn world()".into()),
+                    start_line: Some(2),
+                    end_line: Some(2),
+                    references: vec![],
+                },
+            ],
         }
     }
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
-    async fn process_rust_file_has_timing() {
-        let chunker = TreeSitterChunker::new();
+    async fn process_item_with_children() {
         let summarizer = MockSummarizer::new();
         let embedder = MockEmbedder::new(8);
+        let item = sample_source_item();
 
-        let result = process_file(
-            "src/greet.rs",
-            "pub fn hello() {}",
-            &chunker,
-            &summarizer,
-            &embedder,
-        )
-        .await
-        .unwrap();
+        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
 
-        assert!(result.timing.chunk < Duration::from_secs(5));
-        assert!(result.timing.summarize < Duration::from_secs(5));
-        assert!(result.timing.embed < Duration::from_secs(5));
+        assert_eq!(result.documents.len(), 3);
+        assert_eq!(result.symbol_count, 2);
+
+        let file_doc = result
+            .documents
+            .iter()
+            .find(|d| d.chunk_kind == ChunkKind::File)
+            .expect("should have file-level doc");
+        assert_eq!(file_doc.file_path, "src/main.rs");
+        assert_eq!(file_doc.content_hash.as_deref(), Some("abc123"));
+        assert_eq!(file_doc.language.as_deref(), Some("rust"));
+        assert!(!file_doc.summary.is_empty());
+        assert_eq!(file_doc.vector.len(), 8);
+
+        let sym_docs: Vec<_> = result
+            .documents
+            .iter()
+            .filter(|d| d.chunk_kind == ChunkKind::Symbol)
+            .collect();
+        assert_eq!(sym_docs.len(), 2);
     }
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
-    async fn process_unknown_language_file() {
-        let chunker = TreeSitterChunker::new();
+    async fn process_item_no_children() {
         let summarizer = MockSummarizer::new();
         let embedder = MockEmbedder::new(8);
+        let item = SourceItem {
+            source_path: "linear://ENG-123".into(),
+            content: "Fix the login bug".into(),
+            content_hash: "def456".into(),
+            language: None,
+            children: vec![],
+        };
 
-        let result = process_file(
-            "README.md",
-            "# Hello World",
-            &chunker,
-            &summarizer,
-            &embedder,
-        )
-        .await
-        .unwrap();
+        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
 
-        // File-level only, no symbols
         assert_eq!(result.documents.len(), 1);
-        assert_eq!(result.documents[0].chunk_kind, ChunkKind::File);
         assert_eq!(result.symbol_count, 0);
+        assert_eq!(result.documents[0].chunk_kind, ChunkKind::File);
+        assert_eq!(result.documents[0].file_path, "linear://ENG-123");
+        assert_eq!(result.documents[0].language.as_deref(), Some("unknown"));
     }
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
-    async fn all_document_ids_are_unique() {
-        let chunker = TreeSitterChunker::new();
+    async fn process_item_ids_are_deterministic() {
         let summarizer = MockSummarizer::new();
         let embedder = MockEmbedder::new(8);
+        let item = sample_source_item();
 
-        let content = "pub fn a() {}\npub fn b() {}\npub fn c() {}";
-        let result = process_file("src/lib.rs", content, &chunker, &summarizer, &embedder)
-            .await
-            .unwrap();
+        let r1 = process_item(&item, &summarizer, &embedder).await.unwrap();
+        let r2 = process_item(&item, &summarizer, &embedder).await.unwrap();
+
+        for (d1, d2) in r1.documents.iter().zip(r2.documents.iter()) {
+            assert_eq!(d1.id, d2.id);
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn process_item_ids_are_unique() {
+        let summarizer = MockSummarizer::new();
+        let embedder = MockEmbedder::new(8);
+        let item = sample_source_item();
+
+        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
 
         let ids: Vec<&str> = result.documents.iter().map(|d| d.id.as_str()).collect();
         let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
-        assert_eq!(ids.len(), unique.len(), "duplicate IDs found: {ids:?}");
+        assert_eq!(ids.len(), unique.len(), "duplicate IDs: {ids:?}");
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn process_item_symbol_metadata_propagates() {
+        let summarizer = MockSummarizer::new();
+        let embedder = MockEmbedder::new(8);
+        let item = sample_source_item();
+
+        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
+
+        let hello = result
+            .documents
+            .iter()
+            .find(|d| d.symbol_name.as_deref() == Some("hello"))
+            .expect("should have hello symbol");
+        assert_eq!(hello.symbol_kind.as_deref(), Some("function"));
+        assert_eq!(hello.start_line, Some(1));
+        assert_eq!(hello.end_line, Some(1));
+        assert_eq!(hello.calls.as_deref(), Some(&["println".to_string()][..]));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn process_item_content_hash_on_file_doc_only() {
+        let summarizer = MockSummarizer::new();
+        let embedder = MockEmbedder::new(8);
+        let item = sample_source_item();
+
+        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
+
+        let file_doc = result
+            .documents
+            .iter()
+            .find(|d| d.chunk_kind == ChunkKind::File)
+            .unwrap();
+        assert!(file_doc.content_hash.is_some());
+
+        for sym in result
+            .documents
+            .iter()
+            .filter(|d| d.chunk_kind == ChunkKind::Symbol)
+        {
+            assert!(sym.content_hash.is_none());
+        }
     }
 }

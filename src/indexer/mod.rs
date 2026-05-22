@@ -1,12 +1,10 @@
-//! Indexer: walks the repo, processes each file through the
-//! chunk → summarize → embed → upsert pipeline, and advances the HWM.
+//! Indexer: runs plugins through the summarize → embed → upsert pipeline.
 
 pub mod cost;
 pub mod git;
 pub mod pipeline;
 pub mod walk;
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,20 +12,21 @@ use anyhow::{Result, bail};
 use owo_colors::{OwoColorize, Stream};
 use tokio::sync::Semaphore;
 
-use crate::chunk::Chunker;
 use crate::embed::{Embedder, embedder_identity};
+use crate::plugin::{FetchContext, Plugin, namespace_suffix};
 use crate::store::{ChunkKind, Namespace, NamespaceMetadata, VectorDocument, VectorStore};
 use crate::summarize::Summarizer;
 
 pub struct IndexRun {
-    chunker: Arc<dyn Chunker>,
+    plugins: Vec<Arc<dyn Plugin>>,
     summarizer: Arc<dyn Summarizer>,
     embedder: Arc<dyn Embedder>,
     store: Arc<dyn VectorStore>,
-    namespace: Namespace,
+    base_namespace: Namespace,
     concurrency: usize,
 }
 
+#[derive(Debug)]
 pub struct IndexReport {
     pub files_processed: usize,
     pub files_failed: usize,
@@ -40,286 +39,199 @@ pub struct IndexReport {
 
 impl IndexRun {
     pub fn new(
-        chunker: Arc<dyn Chunker>,
+        plugins: Vec<Arc<dyn Plugin>>,
         summarizer: Arc<dyn Summarizer>,
         embedder: Arc<dyn Embedder>,
         store: Arc<dyn VectorStore>,
-        namespace: Namespace,
+        base_namespace: Namespace,
         concurrency: usize,
     ) -> Self {
         Self {
-            chunker,
+            plugins,
             summarizer,
             embedder,
             store,
-            namespace,
+            base_namespace,
             concurrency: concurrency.max(1),
         }
     }
 
-    /// Run the indexer against the given repo root.
-    ///
-    /// `full = true` ignores the HWM and walks all files. `full = false`
-    /// diffs from the stored HWM to HEAD and processes only changed files.
-    pub async fn run(&self, full: bool, root: &Path) -> Result<IndexReport> {
+    fn plugin_namespace(&self, plugin_name: &str) -> Namespace {
+        match namespace_suffix(plugin_name) {
+            None => self.base_namespace.clone(),
+            Some(suffix) => Namespace::from(format!("{}{suffix}", self.base_namespace.as_str())),
+        }
+    }
+
+    pub async fn run(&self, full: bool) -> Result<IndexReport> {
         let start = Instant::now();
-        let head = git::current_sha(root)?;
+        let mut total_processed = 0usize;
+        let mut total_failed = 0usize;
+        let mut total_upserted = 0usize;
+        let mut total_deleted = 0usize;
+        let mut last_cursor: Option<String> = None;
 
-        if !self.store.namespace_exists(&self.namespace).await? {
-            self.store
-                .create_namespace(&self.namespace, self.embedder.dimension())
-                .await?;
-        }
+        for plugin in &self.plugins {
+            let ns = self.plugin_namespace(plugin.name());
 
-        let meta = self.store.get_metadata(&self.namespace).await?;
-
-        if let Some(ref stored) = meta.embedder
-            && !full
-        {
-            let current = embedder_identity(self.embedder.as_ref());
-            if stored != &current {
-                bail!(
-                    "embedder mismatch: index was built with {stored}, \
-                     but indexer is configured for {current}; \
-                     run with --full to reindex"
-                );
+            if !self.store.namespace_exists(&ns).await? {
+                self.store
+                    .create_namespace(&ns, self.embedder.dimension())
+                    .await?;
             }
-        }
 
-        let (to_process, to_delete) = match (&meta.hwm_sha, full) {
-            (_, true) | (None, _) => {
-                let files = walk::walk_files(root)?;
-                let rel_paths: Vec<String> = files
-                    .iter()
-                    .filter_map(|p| {
-                        p.strip_prefix(root)
-                            .ok()
-                            .map(|r| r.to_string_lossy().to_string())
-                    })
-                    .collect();
-                (rel_paths, vec![])
-            }
-            (Some(hwm), false) => {
-                let diff = git::diff_files(root, hwm, &head)?;
-                (diff.changed, diff.deleted)
-            }
-        };
+            let meta = self.store.get_metadata(&ns).await?;
 
-        let mut vectors_deleted = 0;
-        for file_path in &to_delete {
-            self.store
-                .delete_by_file(&self.namespace, file_path)
-                .await?;
-            vectors_deleted += 1;
-        }
-
-        // Fetch stored content hashes for skip detection
-        let stored_hashes = if full {
-            self.store
-                .get_content_hashes(&self.namespace)
-                .await
-                .unwrap_or_default()
-        } else {
-            std::collections::HashMap::new()
-        };
-
-        let total = to_process.len();
-        eprintln!(
-            "  {} files to process (concurrency: {})",
-            total.if_supports_color(Stream::Stderr, |s| s.cyan()),
-            self.concurrency
-                .if_supports_color(Stream::Stderr, |s| s.cyan()),
-        );
-
-        let semaphore = Arc::new(Semaphore::new(self.concurrency));
-        let mut join_set = tokio::task::JoinSet::new();
-
-        for (i, rel_path) in to_process.into_iter().enumerate() {
-            let permit = semaphore.clone().acquire_owned().await?;
-            let abs_path = root.join(&rel_path);
-            let chunker = self.chunker.clone();
-            let summarizer = self.summarizer.clone();
-            let embedder = self.embedder.clone();
-            let store = self.store.clone();
-            let namespace = self.namespace.clone();
-            let stored_hashes = stored_hashes.clone();
-
-            join_set.spawn(async move {
-                let task = FileTask {
-                    index: i,
-                    total,
-                    rel_path: &rel_path,
-                    abs_path: &abs_path,
-                    stored_hashes: &stored_hashes,
-                    chunker: chunker.as_ref(),
-                    summarizer: summarizer.as_ref(),
-                    embedder: embedder.as_ref(),
-                    store: store.as_ref(),
-                    namespace: &namespace,
-                };
-                let result = process_one_file(&task).await;
-                drop(permit);
-                result
-            });
-        }
-
-        let mut processed = 0usize;
-        let mut failed = 0usize;
-        let mut skipped = 0usize;
-        let mut all_documents: Vec<VectorDocument> = Vec::new();
-
-        while let Some(join_result) = join_set.join_next().await {
-            let result = join_result?;
-            match result.outcome {
-                FileOutcome::Processed { documents } => {
-                    processed += 1;
-                    all_documents.extend(documents);
-                }
-                FileOutcome::Skipped => {
-                    skipped += 1;
-                }
-                FileOutcome::Failed => {
-                    failed += 1;
+            if let Some(ref stored) = meta.embedder
+                && !full
+            {
+                let current = embedder_identity(self.embedder.as_ref());
+                if stored != &current {
+                    bail!(
+                        "embedder mismatch: index was built with {stored}, \
+                         but indexer is configured for {current}; \
+                         run with --full to reindex"
+                    );
                 }
             }
+
+            let stored_hashes = self.store.get_content_hashes(&ns).await.unwrap_or_default();
+            let ctx = FetchContext {
+                full,
+                cursor: meta.hwm_sha.clone(),
+                stored_hashes,
+            };
+
+            let fetch_result = plugin.fetch(&ctx).await?;
+            let cursor = fetch_result.cursor;
+
+            for path in &fetch_result.deletions {
+                self.store.delete_by_file(&ns, path).await?;
+                total_deleted += 1;
+            }
+
+            let items = fetch_result.items;
+            let total = items.len();
+            eprintln!(
+                "  [{}] {} items to process (concurrency: {})",
+                plugin
+                    .name()
+                    .if_supports_color(Stream::Stderr, |s| s.magenta()),
+                total.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                self.concurrency
+                    .if_supports_color(Stream::Stderr, |s| s.cyan()),
+            );
+
+            let semaphore = Arc::new(Semaphore::new(self.concurrency));
+            let mut join_set = tokio::task::JoinSet::new();
+
+            for (i, item) in items.into_iter().enumerate() {
+                let permit = semaphore.clone().acquire_owned().await?;
+                let summarizer = self.summarizer.clone();
+                let embedder = self.embedder.clone();
+                let store = self.store.clone();
+                let ns = ns.clone();
+
+                join_set.spawn(async move {
+                    let source_path = item.source_path.clone();
+                    let idx = format!("{:>4}/{}", i + 1, total);
+
+                    let outcome =
+                        match pipeline::process_item(&item, summarizer.as_ref(), embedder.as_ref())
+                            .await
+                        {
+                            Ok(result) => {
+                                let t = &result.timing;
+                                let syms = format!("({} symbols)", result.symbol_count);
+                                let timing = format!(
+                                    "summarize: {:.1}s, embed: {:.1}s",
+                                    t.summarize.as_secs_f64(),
+                                    t.embed.as_secs_f64(),
+                                );
+                                eprintln!(
+                                    "  [{}] {} {} {} {}",
+                                    idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                                    source_path,
+                                    syms.if_supports_color(Stream::Stderr, |s| s.green()),
+                                    "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                                    timing.if_supports_color(Stream::Stderr, |s| s.yellow()),
+                                );
+                                if let Err(e) = store.delete_by_file(&ns, &source_path).await {
+                                    eprintln!(
+                                        "  [{}] {} {} {}",
+                                        idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                                        source_path,
+                                        "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                                        format!("pre-upsert delete error: {e}")
+                                            .if_supports_color(Stream::Stderr, |s| s.red()),
+                                    );
+                                    ItemOutcome::Failed
+                                } else {
+                                    ItemOutcome::Processed {
+                                        documents: result.documents,
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "  [{}] {} {} {}",
+                                    idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
+                                    source_path,
+                                    "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
+                                    format!("error: {e}")
+                                        .if_supports_color(Stream::Stderr, |s| s.red()),
+                                );
+                                ItemOutcome::Failed
+                            }
+                        };
+                    drop(permit);
+                    outcome
+                });
+            }
+
+            let mut plugin_documents: Vec<VectorDocument> = Vec::new();
+            while let Some(join_result) = join_set.join_next().await {
+                match join_result? {
+                    ItemOutcome::Processed { documents } => {
+                        total_processed += 1;
+                        plugin_documents.extend(documents);
+                    }
+                    ItemOutcome::Failed => {
+                        total_failed += 1;
+                    }
+                }
+            }
+
+            resolve_call_edges(&mut plugin_documents);
+
+            let stats = self.store.upsert(&ns, &plugin_documents).await?;
+            total_upserted += stats.upserted;
+
+            let new_meta = NamespaceMetadata {
+                hwm_sha: cursor.clone(),
+                embedder: Some(embedder_identity(self.embedder.as_ref())),
+                ..Default::default()
+            };
+            self.store.set_metadata(&ns, &new_meta).await?;
+
+            last_cursor = cursor;
         }
-
-        resolve_call_edges(&mut all_documents);
-
-        let upserted = self
-            .store
-            .upsert(&self.namespace, &all_documents)
-            .await?
-            .upserted;
-
-        let new_meta = NamespaceMetadata {
-            hwm_sha: Some(head.clone()),
-            embedder: Some(embedder_identity(self.embedder.as_ref())),
-            ..Default::default()
-        };
-        self.store.set_metadata(&self.namespace, &new_meta).await?;
 
         Ok(IndexReport {
-            files_processed: processed,
-            files_failed: failed,
-            files_skipped: skipped,
-            vectors_upserted: upserted,
-            vectors_deleted,
-            hwm_advanced_to: Some(head),
+            files_processed: total_processed,
+            files_failed: total_failed,
+            files_skipped: 0,
+            vectors_upserted: total_upserted,
+            vectors_deleted: total_deleted,
+            hwm_advanced_to: last_cursor,
             elapsed: start.elapsed(),
         })
     }
 }
 
-struct FileResult {
-    outcome: FileOutcome,
-}
-
-enum FileOutcome {
+enum ItemOutcome {
     Processed { documents: Vec<VectorDocument> },
-    Skipped,
     Failed,
-}
-
-struct FileTask<'a> {
-    index: usize,
-    total: usize,
-    rel_path: &'a str,
-    abs_path: &'a std::path::Path,
-    stored_hashes: &'a std::collections::HashMap<String, String>,
-    chunker: &'a dyn Chunker,
-    summarizer: &'a dyn Summarizer,
-    embedder: &'a dyn Embedder,
-    store: &'a dyn VectorStore,
-    namespace: &'a Namespace,
-}
-
-async fn process_one_file(task: &FileTask<'_>) -> FileResult {
-    let index = task.index;
-    let total = task.total;
-    let rel_path = task.rel_path;
-    let abs_path = task.abs_path;
-    let stored_hashes = task.stored_hashes;
-    let chunker = task.chunker;
-    let summarizer = task.summarizer;
-    let embedder = task.embedder;
-    let store = task.store;
-    let namespace = task.namespace;
-    let content = match std::fs::read_to_string(abs_path) {
-        Ok(c) => c,
-        Err(e) => {
-            let idx = format!("{:>4}/{}", index + 1, total);
-            eprintln!(
-                "  [{}] {rel_path} {} {}",
-                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
-                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
-                format!("error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
-            );
-            return FileResult {
-                outcome: FileOutcome::Failed,
-            };
-        }
-    };
-
-    // Content-hash skip: if stored hash matches, skip expensive pipeline
-    let content_hash = blake3::hash(content.as_bytes()).to_hex()[..16].to_string();
-    if stored_hashes
-        .get(rel_path)
-        .is_some_and(|s| *s == content_hash)
-    {
-        return FileResult {
-            outcome: FileOutcome::Skipped,
-        };
-    }
-
-    let idx = format!("{:>4}/{}", index + 1, total);
-
-    match pipeline::process_file(rel_path, &content, chunker, summarizer, embedder).await {
-        Ok(result) => {
-            let t = &result.timing;
-            let syms = format!("({} symbols)", result.symbol_count);
-            let timing = format!(
-                "summarize: {:.1}s, embed: {:.1}s",
-                t.summarize.as_secs_f64(),
-                t.embed.as_secs_f64(),
-            );
-            eprintln!(
-                "  [{}] {rel_path} {} {} {}",
-                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
-                syms.if_supports_color(Stream::Stderr, |s| s.green()),
-                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
-                timing.if_supports_color(Stream::Stderr, |s| s.yellow()),
-            );
-            if let Err(e) = store.delete_by_file(namespace, rel_path).await {
-                eprintln!(
-                    "  [{}] {rel_path} {} {}",
-                    idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
-                    "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
-                    format!("pre-upsert delete error: {e}")
-                        .if_supports_color(Stream::Stderr, |s| s.red()),
-                );
-                return FileResult {
-                    outcome: FileOutcome::Failed,
-                };
-            }
-            FileResult {
-                outcome: FileOutcome::Processed {
-                    documents: result.documents,
-                },
-            }
-        }
-        Err(e) => {
-            eprintln!(
-                "  [{}] {rel_path} {} {}",
-                idx.if_supports_color(Stream::Stderr, |s| s.cyan()),
-                "—".if_supports_color(Stream::Stderr, |s| s.dimmed()),
-                format!("error: {e}").if_supports_color(Stream::Stderr, |s| s.red()),
-            );
-            FileResult {
-                outcome: FileOutcome::Failed,
-            }
-        }
-    }
 }
 
 pub fn resolve_call_edges(documents: &mut [VectorDocument]) {
@@ -407,6 +319,11 @@ pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::SourceItem;
+    use crate::testing::mock_embed::MockEmbedder;
+    use crate::testing::mock_plugin::MockPlugin;
+    use crate::testing::mock_store::MockVectorStore;
+    use crate::testing::mock_summarize::MockSummarizer;
 
     fn sym_doc(id: &str, file: &str, name: &str, calls: Vec<&str>) -> VectorDocument {
         VectorDocument {
@@ -425,6 +342,27 @@ mod tests {
             called_by: None,
         }
     }
+
+    fn sample_items() -> Vec<SourceItem> {
+        vec![
+            SourceItem {
+                source_path: "src/main.rs".into(),
+                content: "pub fn hello() {}".into(),
+                content_hash: "hash1".into(),
+                language: Some("rust".into()),
+                children: vec![],
+            },
+            SourceItem {
+                source_path: "src/lib.rs".into(),
+                content: "pub fn lib_fn() {}".into(),
+                content_hash: "hash2".into(),
+                language: Some("rust".into()),
+                children: vec![],
+            },
+        ]
+    }
+
+    // ── resolve_call_edges tests ─────────────────────────────────────
 
     #[test]
     fn resolve_populates_calls_and_called_by() {
@@ -498,5 +436,276 @@ mod tests {
 
         assert!(docs[0].calls.is_none());
         assert!(docs[0].called_by.is_none());
+    }
+
+    // ── plugin_namespace tests ───────────────────────────────────────
+
+    #[test]
+    fn plugin_namespace_files_uses_base() {
+        let run = IndexRun::new(
+            vec![],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            Arc::new(MockVectorStore::new()),
+            Namespace::from("my-repo"),
+            1,
+        );
+        assert_eq!(run.plugin_namespace("files").as_str(), "my-repo");
+    }
+
+    #[test]
+    fn plugin_namespace_other_appends_suffix() {
+        let run = IndexRun::new(
+            vec![],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            Arc::new(MockVectorStore::new()),
+            Namespace::from("my-repo"),
+            1,
+        );
+        assert_eq!(run.plugin_namespace("linear").as_str(), "my-repo--linear");
+    }
+
+    // ── IndexRun integration tests ───────────────────────────────────
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_processes_items_from_plugin() {
+        let store = Arc::new(MockVectorStore::new());
+        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", sample_items()));
+        let run = IndexRun::new(
+            vec![plugin],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            store.clone(),
+            Namespace::from("test"),
+            1,
+        );
+        let report = run.run(true).await.unwrap();
+
+        assert_eq!(report.files_processed, 2);
+        assert_eq!(report.files_failed, 0);
+        assert!(report.vectors_upserted > 0);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_handles_deletions() {
+        let store = Arc::new(MockVectorStore::new());
+        store
+            .create_namespace(&Namespace::from("test"), 8)
+            .await
+            .unwrap();
+
+        let doc = VectorDocument {
+            id: "to-delete".into(),
+            vector: vec![0.1; 8],
+            summary: "old doc".into(),
+            file_path: "deleted.rs".into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: Some("rust".into()),
+            content_hash: None,
+            calls: None,
+            called_by: None,
+        };
+        store
+            .upsert(&Namespace::from("test"), &[doc])
+            .await
+            .unwrap();
+
+        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::with_deletions(
+            "files",
+            vec![],
+            vec!["deleted.rs".into()],
+        ));
+        let run = IndexRun::new(
+            vec![plugin],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            store.clone(),
+            Namespace::from("test"),
+            1,
+        );
+        let report = run.run(true).await.unwrap();
+
+        assert_eq!(report.vectors_deleted, 1);
+        let docs = store
+            .list_documents(&Namespace::from("test"))
+            .await
+            .unwrap();
+        assert!(
+            docs.iter().all(|d| d.file_path != "deleted.rs"),
+            "deleted.rs should be removed"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_multiple_plugins_separate_namespaces() {
+        let store = Arc::new(MockVectorStore::new());
+        let files_plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new(
+            "files",
+            vec![SourceItem {
+                source_path: "a.rs".into(),
+                content: "fn a() {}".into(),
+                content_hash: "h1".into(),
+                language: Some("rust".into()),
+                children: vec![],
+            }],
+        ));
+        let linear_plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new(
+            "linear",
+            vec![SourceItem {
+                source_path: "linear://ENG-1".into(),
+                content: "Fix bug".into(),
+                content_hash: "h2".into(),
+                language: None,
+                children: vec![],
+            }],
+        ));
+        let run = IndexRun::new(
+            vec![files_plugin, linear_plugin],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            store.clone(),
+            Namespace::from("repo"),
+            1,
+        );
+        let report = run.run(true).await.unwrap();
+
+        assert!(
+            store
+                .namespace_exists(&Namespace::from("repo"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .namespace_exists(&Namespace::from("repo--linear"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(report.files_processed, 2);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_persists_cursor_in_metadata() {
+        let store = Arc::new(MockVectorStore::new());
+        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::with_cursor(
+            "files",
+            sample_items(),
+            "abc123def".into(),
+        ));
+        let run = IndexRun::new(
+            vec![plugin],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            store.clone(),
+            Namespace::from("test"),
+            1,
+        );
+        let report = run.run(true).await.unwrap();
+
+        assert_eq!(report.hwm_advanced_to.as_deref(), Some("abc123def"));
+
+        let meta = store.get_metadata(&Namespace::from("test")).await.unwrap();
+        assert_eq!(meta.hwm_sha.as_deref(), Some("abc123def"));
+        assert_eq!(meta.embedder.as_deref(), Some("mock/mock-embed-v1"));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_embedder_mismatch_errors_on_incremental() {
+        let store = Arc::new(MockVectorStore::new());
+        store
+            .create_namespace(&Namespace::from("test"), 8)
+            .await
+            .unwrap();
+        store
+            .set_metadata(
+                &Namespace::from("test"),
+                &NamespaceMetadata {
+                    hwm_sha: Some("old-sha".into()),
+                    embedder: Some("voyage/voyage-code-3".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", vec![]));
+        let run = IndexRun::new(
+            vec![plugin],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            store,
+            Namespace::from("test"),
+            1,
+        );
+        let err = run.run(false).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains("embedder mismatch"),
+            "expected embedder mismatch error, got: {err}"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_embedder_mismatch_allowed_on_full() {
+        let store = Arc::new(MockVectorStore::new());
+        store
+            .create_namespace(&Namespace::from("test"), 8)
+            .await
+            .unwrap();
+        store
+            .set_metadata(
+                &Namespace::from("test"),
+                &NamespaceMetadata {
+                    hwm_sha: Some("old-sha".into()),
+                    embedder: Some("voyage/voyage-code-3".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", sample_items()));
+        let run = IndexRun::new(
+            vec![plugin],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            store,
+            Namespace::from("test"),
+            1,
+        );
+        let report = run.run(true).await.unwrap();
+
+        assert_eq!(report.files_processed, 2);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_empty_plugin_no_errors() {
+        let store = Arc::new(MockVectorStore::new());
+        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", vec![]));
+        let run = IndexRun::new(
+            vec![plugin],
+            Arc::new(MockSummarizer::new()),
+            Arc::new(MockEmbedder::new(8)),
+            store,
+            Namespace::from("test"),
+            1,
+        );
+        let report = run.run(true).await.unwrap();
+
+        assert_eq!(report.files_processed, 0);
+        assert_eq!(report.files_failed, 0);
+        assert_eq!(report.vectors_upserted, 0);
     }
 }

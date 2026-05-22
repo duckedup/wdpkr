@@ -141,6 +141,7 @@ mod tests {
                 assert_eq!(args.concurrency, 4);
                 assert!(args.from.is_none());
                 assert!(args.max_cost.is_none());
+                assert!(args.plugin.is_none());
             }
             _ => panic!("expected Index"),
         }
@@ -171,6 +172,22 @@ mod tests {
             }
             _ => panic!("expected Index"),
         }
+    }
+
+    #[test]
+    fn index_parses_plugin_flag() {
+        let cli = Cli::try_parse_from(["wdpkr", "index", "--plugin", "files"]).unwrap();
+        match cli.command {
+            Command::Index(args) => {
+                assert_eq!(args.plugin.as_deref(), Some("files"));
+            }
+            _ => panic!("expected Index"),
+        }
+    }
+
+    #[test]
+    fn index_plugin_with_no_value_errors() {
+        assert!(Cli::try_parse_from(["wdpkr", "index", "--plugin"]).is_err());
     }
 
     // ── config ────────────────────────────────────────────────────────

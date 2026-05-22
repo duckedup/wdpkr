@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use wdpkr::chunk::tree_sitter::TreeSitterChunker;
 use wdpkr::indexer::IndexRun;
+use wdpkr::plugin::Plugin;
+use wdpkr::plugin::files::FilesPlugin;
 use wdpkr::search::{SearchParams, SearchRun};
 use wdpkr::store::{Namespace, VectorStore};
 use wdpkr::testing::mock_embed::MockEmbedder;
@@ -126,9 +127,10 @@ fn cleanup(dir: &Path) {
     std::fs::remove_dir_all(dir).ok();
 }
 
-fn build_index_run(store: MockVectorStore, embedder: MockEmbedder) -> IndexRun {
+fn build_index_run(dir: &Path, store: MockVectorStore, embedder: MockEmbedder) -> IndexRun {
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.to_path_buf()))];
     IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(embedder),
         Arc::new(store),
@@ -145,9 +147,9 @@ async fn full_index_populates_store() {
     let dir = create_fixture_repo("full-index");
     let store = MockVectorStore::new();
     let embedder = MockEmbedder::new(8);
-    let index = build_index_run(store, embedder);
+    let index = build_index_run(&dir, store, embedder);
 
-    let report = index.run(true, &dir).await.unwrap();
+    let report = index.run(true).await.unwrap();
 
     assert!(report.files_processed > 0, "should process files");
     assert_eq!(report.files_failed, 0, "no files should fail");
@@ -163,9 +165,9 @@ async fn index_produces_file_and_symbol_documents() {
     let dir = create_fixture_repo("docs");
     let store = MockVectorStore::new();
     let embedder = MockEmbedder::new(8);
-    let index = build_index_run(store, embedder);
+    let index = build_index_run(&dir, store, embedder);
 
-    let report = index.run(true, &dir).await.unwrap();
+    let report = index.run(true).await.unwrap();
 
     // We have 4 files: payments.rs (2 fns), auth.py (2 fns), handler.go (1 fn), README.md
     // Expected: >= 4 file-level + several symbol-level
@@ -184,9 +186,9 @@ async fn hwm_is_stored_after_indexing() {
     let dir = create_fixture_repo("hwm");
     let store = MockVectorStore::new();
     let embedder = MockEmbedder::new(8);
-    let index = build_index_run(store, embedder);
+    let index = build_index_run(&dir, store, embedder);
 
-    let report = index.run(true, &dir).await.unwrap();
+    let report = index.run(true).await.unwrap();
 
     // The IndexRun owns the store now, but we can check via the report
     assert!(report.hwm_advanced_to.is_some());
@@ -207,15 +209,16 @@ async fn index_then_search_round_trip() {
     let ns = Namespace::from("test-roundtrip");
 
     // Index
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    let report = index.run(true, &dir).await.unwrap();
+    let report = index.run(true).await.unwrap();
     assert!(report.vectors_upserted > 0);
 
     // Search
@@ -259,15 +262,16 @@ async fn search_finds_indexed_file_paths() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-paths");
 
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    index.run(true, &dir).await.unwrap();
+    index.run(true).await.unwrap();
 
     let search = SearchRun::new(
         Box::new(MockEmbedder::new(8)),
@@ -305,15 +309,16 @@ async fn symbols_appear_nested_under_files() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-symbols");
 
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    index.run(true, &dir).await.unwrap();
+    index.run(true).await.unwrap();
 
     let search = SearchRun::new(
         Box::new(MockEmbedder::new(8)),
@@ -362,15 +367,16 @@ async fn scope_filter_limits_results_after_index() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-scope");
 
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    index.run(true, &dir).await.unwrap();
+    index.run(true).await.unwrap();
 
     let search = SearchRun::new(
         Box::new(MockEmbedder::new(8)),
@@ -411,15 +417,16 @@ async fn incremental_index_only_processes_changed_files() {
     let ns = Namespace::from("test-incr");
 
     // Full index
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    let report1 = index.run(true, &dir).await.unwrap();
+    let report1 = index.run(true).await.unwrap();
     let initial_count = report1.files_processed;
 
     // Add a new file and commit
@@ -432,15 +439,16 @@ async fn incremental_index_only_processes_changed_files() {
     git(&dir, &["commit", "-m", "add new feature"]);
 
     // Incremental index (full=false)
+    let plugins2: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index2 = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins2,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    let report2 = index2.run(false, &dir).await.unwrap();
+    let report2 = index2.run(false).await.unwrap();
 
     assert!(
         report2.files_processed < initial_count,
@@ -462,15 +470,16 @@ async fn incremental_index_removes_stale_symbols() {
     let ns = Namespace::from("test-stale");
 
     // Full index — payments.rs has release_payment + process_refund
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    index.run(true, &dir).await.unwrap();
+    index.run(true).await.unwrap();
 
     // Count vectors for payments.rs before modification
     let before = store.document_count(&ns, "src/payments.rs");
@@ -496,15 +505,16 @@ pub fn release_payment(payee_id: u64, amount: f64) -> Result<(), String> {
     git(&dir, &["commit", "-m", "remove process_refund"]);
 
     // Incremental index
+    let plugins2: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index2 = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins2,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    index2.run(false, &dir).await.unwrap();
+    index2.run(false).await.unwrap();
 
     // After: should have fewer vectors (stale process_refund symbol removed)
     let after = store.document_count(&ns, "src/payments.rs");
@@ -526,15 +536,16 @@ async fn json_output_is_valid_after_full_pipeline() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-json");
 
+    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
     let index = IndexRun::new(
-        Arc::new(TreeSitterChunker::new()),
+        plugins,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
     );
-    index.run(true, &dir).await.unwrap();
+    index.run(true).await.unwrap();
 
     let search = SearchRun::new(
         Box::new(MockEmbedder::new(8)),
