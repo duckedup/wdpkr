@@ -31,18 +31,18 @@
 
 mod embed;
 mod indexer;
-pub mod plugin;
 mod store;
 mod summarizer;
+pub mod tap;
 
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
 pub use embed::{EmbedConfig, EmbedSources};
 pub use indexer::{IndexerConfig, IndexerSources};
-pub use plugin::{FilePluginConfig, PluginConfig, PluginsSources};
 pub use store::{StoreConfig, StoreSources};
 pub use summarizer::{SummarizerConfig, SummarizerSources};
+pub use tap::{FileTapConfig, TapConfig, TapsSources};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -148,7 +148,7 @@ pub struct Config {
     pub embed: EmbedConfig,
     pub summarizer: SummarizerConfig,
     pub indexer: IndexerConfig,
-    pub plugins: Vec<PluginConfig>,
+    pub taps: Vec<TapConfig>,
 }
 
 /// Per-field source attribution paralleling [`Config`].
@@ -157,7 +157,7 @@ pub struct ConfigSources {
     pub embed: EmbedSources,
     pub summarizer: SummarizerSources,
     pub indexer: IndexerSources,
-    pub plugins: PluginsSources,
+    pub taps: TapsSources,
 }
 
 /// Values + sources, returned by [`ResolvedConfig::new`].
@@ -208,21 +208,21 @@ impl ResolvedConfig {
         let (embed, embed_sources) = EmbedConfig::resolve(&file);
         let (summarizer, summarizer_sources) = SummarizerConfig::resolve(&file);
         let (indexer, indexer_sources) = IndexerConfig::resolve(&file);
-        let (plugins, plugins_sources) = plugin::resolve(&file);
+        let (taps, taps_sources) = tap::resolve(&file);
         Self {
             config: Config {
                 store,
                 embed,
                 summarizer,
                 indexer,
-                plugins,
+                taps,
             },
             sources: ConfigSources {
                 store: store_sources,
                 embed: embed_sources,
                 summarizer: summarizer_sources,
                 indexer: indexer_sources,
-                plugins: plugins_sources,
+                taps: taps_sources,
             },
         }
     }
@@ -303,14 +303,14 @@ impl ResolvedConfig {
                 source: s.indexer.hwm_success_threshold.clone(),
             },
             ConfigEntry {
-                key: "plugins",
+                key: "taps",
                 value: c
-                    .plugins
+                    .taps
                     .iter()
                     .map(|p| p.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", "),
-                source: s.plugins.source.clone(),
+                source: s.taps.source.clone(),
             },
         ]
     }
@@ -336,7 +336,7 @@ pub struct FileConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexer: Option<FileIndexerConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<Vec<FilePluginConfig>>,
+    pub taps: Option<Vec<FileTapConfig>>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]

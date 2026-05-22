@@ -1,4 +1,4 @@
-//! Deterministic [`Plugin`] for tests and the eval harness.
+//! Deterministic [`Tap`] for tests and the eval harness.
 //!
 //! Returns configured items from `fetch()`, with optional content-hash
 //! skip detection. Pure Rust — no FFI, no I/O, Miri-safe.
@@ -6,16 +6,16 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::plugin::{FetchContext, FetchResult, Plugin, SourceItem};
+use crate::tap::{FetchContext, FetchResult, SourceItem, Tap};
 
-pub struct MockPlugin {
+pub struct MockTap {
     name: String,
     items: Vec<SourceItem>,
     deletions: Vec<String>,
     cursor: Option<String>,
 }
 
-impl MockPlugin {
+impl MockTap {
     pub fn new(name: &str, items: Vec<SourceItem>) -> Self {
         Self {
             name: name.to_string(),
@@ -45,7 +45,7 @@ impl MockPlugin {
 }
 
 #[async_trait]
-impl Plugin for MockPlugin {
+impl Tap for MockTap {
     fn name(&self) -> &str {
         &self.name
     }
@@ -79,13 +79,13 @@ mod tests {
 
     #[test]
     fn name_matches_constructor() {
-        let p = MockPlugin::new("linear", vec![]);
+        let p = MockTap::new("linear", vec![]);
         assert_eq!(p.name(), "linear");
     }
 
     #[test]
     fn default_deletions_empty() {
-        let p = MockPlugin::new("test", vec![]);
+        let p = MockTap::new("test", vec![]);
         assert!(p.deletions.is_empty());
     }
 }

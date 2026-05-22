@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::{FileConfig, Source};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilePluginConfig {
+pub struct FileTapConfig {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -16,7 +16,7 @@ pub struct FilePluginConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct PluginConfig {
+pub struct TapConfig {
     pub name: String,
     pub command: Option<String>,
     pub args: Vec<String>,
@@ -24,19 +24,19 @@ pub struct PluginConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct PluginsSources {
+pub struct TapsSources {
     pub source: Source,
 }
 
-pub fn resolve(file: &Option<FileConfig>) -> (Vec<PluginConfig>, PluginsSources) {
+pub fn resolve(file: &Option<FileConfig>) -> (Vec<TapConfig>, TapsSources) {
     match file {
-        Some(fc) if fc.plugins.as_ref().is_some_and(|p| !p.is_empty()) => {
-            let plugins = fc
-                .plugins
+        Some(fc) if fc.taps.as_ref().is_some_and(|p| !p.is_empty()) => {
+            let taps = fc
+                .taps
                 .as_ref()
                 .unwrap()
                 .iter()
-                .map(|fp| PluginConfig {
+                .map(|fp| TapConfig {
                     name: fp.name.clone(),
                     command: fp.command.clone(),
                     args: fp.args.clone().unwrap_or_default(),
@@ -44,20 +44,20 @@ pub fn resolve(file: &Option<FileConfig>) -> (Vec<PluginConfig>, PluginsSources)
                 })
                 .collect();
             (
-                plugins,
-                PluginsSources {
+                taps,
+                TapsSources {
                     source: Source::File,
                 },
             )
         }
         _ => (
-            vec![PluginConfig {
+            vec![TapConfig {
                 name: "files".into(),
                 command: None,
                 args: vec![],
                 settings: HashMap::new(),
             }],
-            PluginsSources {
+            TapsSources {
                 source: Source::Default,
             },
         ),
@@ -70,29 +70,29 @@ mod tests {
     use crate::config::FileConfig;
 
     #[test]
-    fn absent_plugins_defaults_to_files() {
-        let (plugins, sources) = resolve(&None);
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].name, "files");
+    fn absent_taps_defaults_to_files() {
+        let (taps, sources) = resolve(&None);
+        assert_eq!(taps.len(), 1);
+        assert_eq!(taps[0].name, "files");
         assert_eq!(sources.source, Source::Default);
     }
 
     #[test]
-    fn empty_plugins_defaults_to_files() {
+    fn empty_taps_defaults_to_files() {
         let file = FileConfig {
-            plugins: Some(vec![]),
+            taps: Some(vec![]),
             ..Default::default()
         };
-        let (plugins, sources) = resolve(&Some(file));
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].name, "files");
+        let (taps, sources) = resolve(&Some(file));
+        assert_eq!(taps.len(), 1);
+        assert_eq!(taps[0].name, "files");
         assert_eq!(sources.source, Source::Default);
     }
 
     #[test]
-    fn explicit_files_plugin() {
+    fn explicit_files_tap() {
         let file = FileConfig {
-            plugins: Some(vec![FilePluginConfig {
+            taps: Some(vec![FileTapConfig {
                 name: "files".into(),
                 command: None,
                 args: None,
@@ -100,25 +100,25 @@ mod tests {
             }]),
             ..Default::default()
         };
-        let (plugins, sources) = resolve(&Some(file));
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].name, "files");
+        let (taps, sources) = resolve(&Some(file));
+        assert_eq!(taps.len(), 1);
+        assert_eq!(taps[0].name, "files");
         assert_eq!(sources.source, Source::File);
     }
 
     #[test]
-    fn multiple_plugins_parse() {
+    fn multiple_taps_parse() {
         let file = FileConfig {
-            plugins: Some(vec![
-                FilePluginConfig {
+            taps: Some(vec![
+                FileTapConfig {
                     name: "files".into(),
                     command: None,
                     args: None,
                     settings: None,
                 },
-                FilePluginConfig {
+                FileTapConfig {
                     name: "linear".into(),
-                    command: Some("/usr/bin/linear-plugin".into()),
+                    command: Some("/usr/bin/linear-tap".into()),
                     args: Some(vec!["--team".into(), "ENG".into()]),
                     settings: Some(HashMap::from([(
                         "api_key_env".into(),
@@ -128,40 +128,34 @@ mod tests {
             ]),
             ..Default::default()
         };
-        let (plugins, sources) = resolve(&Some(file));
-        assert_eq!(plugins.len(), 2);
-        assert_eq!(plugins[0].name, "files");
-        assert_eq!(plugins[1].name, "linear");
-        assert_eq!(
-            plugins[1].command.as_deref(),
-            Some("/usr/bin/linear-plugin")
-        );
-        assert_eq!(plugins[1].args, vec!["--team", "ENG"]);
-        assert!(plugins[1].settings.contains_key("api_key_env"));
+        let (taps, sources) = resolve(&Some(file));
+        assert_eq!(taps.len(), 2);
+        assert_eq!(taps[0].name, "files");
+        assert_eq!(taps[1].name, "linear");
+        assert_eq!(taps[1].command.as_deref(), Some("/usr/bin/linear-tap"));
+        assert_eq!(taps[1].args, vec!["--team", "ENG"]);
+        assert!(taps[1].settings.contains_key("api_key_env"));
         assert_eq!(sources.source, Source::File);
     }
 
     #[test]
-    fn plugin_with_command_and_settings_yaml_round_trip() {
+    fn tap_with_command_and_settings_yaml_round_trip() {
         let yaml = r#"
-plugins:
+taps:
   - name: custom-tool
-    command: /path/to/plugin
+    command: /path/to/tap
     args: ["--flag"]
     settings:
       key: value
       count: 42
 "#;
         let parsed: FileConfig = serde_yaml::from_str(yaml).expect("yaml parses");
-        let plugins = parsed.plugins.as_ref().unwrap();
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].name, "custom-tool");
-        assert_eq!(plugins[0].command.as_deref(), Some("/path/to/plugin"));
-        assert_eq!(
-            plugins[0].args.as_ref().unwrap(),
-            &vec!["--flag".to_string()]
-        );
-        let settings = plugins[0].settings.as_ref().unwrap();
+        let taps = parsed.taps.as_ref().unwrap();
+        assert_eq!(taps.len(), 1);
+        assert_eq!(taps[0].name, "custom-tool");
+        assert_eq!(taps[0].command.as_deref(), Some("/path/to/tap"));
+        assert_eq!(taps[0].args.as_ref().unwrap(), &vec!["--flag".to_string()]);
+        let settings = taps[0].settings.as_ref().unwrap();
         assert_eq!(
             settings.get("key"),
             Some(&serde_yaml::Value::String("value".into()))
@@ -172,9 +166,6 @@ plugins:
     fn default_config_yaml_still_parses() {
         let parsed: FileConfig =
             serde_yaml::from_str(crate::config::DEFAULT_CONFIG_YAML).expect("default yaml parses");
-        assert!(
-            parsed.plugins.is_none(),
-            "default config should not have plugins"
-        );
+        assert!(parsed.taps.is_none(), "default config should not have taps");
     }
 }

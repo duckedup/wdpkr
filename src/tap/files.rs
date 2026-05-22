@@ -1,4 +1,4 @@
-//! Built-in files plugin: walks a git repository, reads source files,
+//! Built-in files tap: walks a git repository, reads source files,
 //! chunks with tree-sitter, and produces [`SourceItem`]s for the shared
 //! indexing pipeline.
 
@@ -12,13 +12,13 @@ use crate::chunk::{Chunker, detect_language};
 use crate::indexer::git;
 use crate::indexer::walk;
 
-use super::{FetchContext, FetchResult, Plugin, SourceChunk, SourceItem};
+use super::{FetchContext, FetchResult, SourceChunk, SourceItem, Tap};
 
-pub struct FilesPlugin {
+pub struct FilesTap {
     root: PathBuf,
 }
 
-impl FilesPlugin {
+impl FilesTap {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
@@ -83,7 +83,7 @@ impl FilesPlugin {
 }
 
 #[async_trait]
-impl Plugin for FilesPlugin {
+impl Tap for FilesTap {
     fn name(&self) -> &str {
         "files"
     }
@@ -134,7 +134,7 @@ mod tests {
     fn init_temp_repo(files: &[(&str, &str)]) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "wdpkr-files-plugin-{}-{}-{}",
+            "wdpkr-files-tap-{}-{}-{}",
             std::process::id(),
             n,
             std::time::SystemTime::now()
@@ -195,13 +195,13 @@ mod tests {
             ("README.md", "# Hello"),
         ]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: true,
             cursor: None,
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         assert_eq!(result.items.len(), 3);
         assert!(result.cursor.is_some());
@@ -227,13 +227,13 @@ mod tests {
             "pub fn hello() {\n    println!(\"hi\");\n}\n\npub fn goodbye() {\n    println!(\"bye\");\n}",
         )]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: true,
             cursor: None,
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         let main_item = result
             .items
@@ -259,13 +259,13 @@ mod tests {
     async fn unknown_language_has_no_children() {
         let dir = init_temp_repo(&[("config.yaml", "key: value")]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: true,
             cursor: None,
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         let item = &result.items[0];
         assert!(item.language.is_none());
@@ -279,7 +279,7 @@ mod tests {
     async fn content_hash_skip_detection() {
         let dir = init_temp_repo(&[("a.rs", "pub fn a() {}"), ("b.rs", "pub fn b() {}")]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
 
         let hash_a = blake3::hash(b"pub fn a() {}").to_hex()[..16].to_string();
         let mut stored = HashMap::new();
@@ -290,7 +290,7 @@ mod tests {
             cursor: None,
             stored_hashes: stored,
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         let paths: Vec<&str> = result
             .items
@@ -308,7 +308,7 @@ mod tests {
     async fn full_fetch_ignores_stored_hashes() {
         let dir = init_temp_repo(&[("a.rs", "pub fn a() {}")]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
 
         let hash_a = blake3::hash(b"pub fn a() {}").to_hex()[..16].to_string();
         let mut stored = HashMap::new();
@@ -319,7 +319,7 @@ mod tests {
             cursor: None,
             stored_hashes: stored,
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].source_path, "a.rs");
@@ -348,13 +348,13 @@ mod tests {
             .output()
             .unwrap();
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: false,
             cursor: Some(sha1),
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         let paths: Vec<&str> = result
             .items
@@ -386,13 +386,13 @@ mod tests {
             .output()
             .unwrap();
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: false,
             cursor: Some(sha1),
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         assert!(result.deletions.contains(&"b.rs".to_string()));
 
@@ -409,13 +409,13 @@ mod tests {
 
         std::fs::write(dir.join("ignored.rs"), "pub fn ignored() {}").unwrap();
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: true,
             cursor: None,
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         let paths: Vec<&str> = result
             .items
@@ -432,13 +432,13 @@ mod tests {
     async fn empty_repo_returns_empty() {
         let dir = init_temp_repo(&[(".gitkeep", "")]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: true,
             cursor: None,
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         // .gitkeep is hidden (starts with .), should be excluded by walk
         assert!(result.items.is_empty() || result.items.len() == 1);
@@ -449,9 +449,9 @@ mod tests {
     }
 
     #[test]
-    fn plugin_name() {
-        let plugin = FilesPlugin::new(PathBuf::from("."));
-        assert_eq!(plugin.name(), "files");
+    fn tap_name() {
+        let tap = FilesTap::new(PathBuf::from("."));
+        assert_eq!(tap.name(), "files");
     }
 
     #[cfg_attr(miri, ignore)]
@@ -459,14 +459,14 @@ mod tests {
     async fn content_hash_is_deterministic() {
         let dir = init_temp_repo(&[("a.rs", "pub fn a() {}")]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: true,
             cursor: None,
             stored_hashes: HashMap::new(),
         };
-        let r1 = plugin.fetch(&ctx).await.unwrap();
-        let r2 = plugin.fetch(&ctx).await.unwrap();
+        let r1 = tap.fetch(&ctx).await.unwrap();
+        let r2 = tap.fetch(&ctx).await.unwrap();
 
         assert_eq!(r1.items[0].content_hash, r2.items[0].content_hash);
 
@@ -478,13 +478,13 @@ mod tests {
     async fn symbol_chunks_have_line_numbers() {
         let dir = init_temp_repo(&[("src/main.rs", "pub fn hello() {\n    println!(\"hi\");\n}")]);
 
-        let plugin = FilesPlugin::new(dir.clone());
+        let tap = FilesTap::new(dir.clone());
         let ctx = FetchContext {
             full: true,
             cursor: None,
             stored_hashes: HashMap::new(),
         };
-        let result = plugin.fetch(&ctx).await.unwrap();
+        let result = tap.fetch(&ctx).await.unwrap();
 
         let item = &result
             .items

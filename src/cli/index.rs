@@ -9,9 +9,9 @@ use crate::config::Config;
 use crate::embed::build_embedder;
 use crate::indexer::cost::{self, ProviderRates};
 use crate::indexer::{IndexRun, resolve_namespace};
-use crate::plugin::build_plugins;
 use crate::store::build_store;
 use crate::summarize::anthropic::build_summarizer;
+use crate::tap::build_taps;
 
 #[derive(Args, Debug)]
 pub struct IndexArgs {
@@ -40,9 +40,9 @@ pub struct IndexArgs {
     #[arg(long)]
     pub skip_summaries: bool,
 
-    /// Run only this configured plugin (default: all)
+    /// Run only this configured tap (default: all)
     #[arg(long)]
-    pub plugin: Option<String>,
+    pub tap: Option<String>,
 }
 
 pub async fn run(args: IndexArgs) -> Result<()> {
@@ -78,9 +78,9 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     );
 
     let root = std::env::current_dir()?;
-    let plugins = build_plugins(&config.plugins, root, args.plugin.as_deref())?;
+    let taps = build_taps(&config.taps, root, args.tap.as_deref())?;
     let index_run = IndexRun::new(
-        plugins,
+        taps,
         Arc::from(summarizer),
         Arc::from(embedder),
         Arc::from(store),

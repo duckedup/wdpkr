@@ -6,10 +6,10 @@ use anyhow::Result;
 
 use crate::chunk::SymbolChunk;
 use crate::embed::Embedder;
-use crate::plugin::SourceItem;
 use crate::store::{ChunkKind, VectorDocument};
 use crate::summarize::rollup::{DEFAULT_TOKEN_THRESHOLD, summarize_file_and_symbols};
 use crate::summarize::{FileSummaryInput, Summarizer};
+use crate::tap::SourceItem;
 
 pub struct PipelineResult {
     pub documents: Vec<VectorDocument>,
@@ -25,7 +25,7 @@ pub struct PipelineTiming {
     pub embed: Duration,
 }
 
-/// Process a [`SourceItem`] (already chunked by a plugin) through the
+/// Process a [`SourceItem`] (already chunked by a tap) through the
 /// summarize → embed → build VectorDocuments pipeline.
 pub async fn process_item(
     item: &SourceItem,
@@ -147,7 +147,7 @@ pub fn document_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::SourceChunk;
+    use crate::tap::SourceChunk;
     use crate::testing::mock_embed::MockEmbedder;
     use crate::testing::mock_summarize::MockSummarizer;
 

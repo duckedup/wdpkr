@@ -11,10 +11,10 @@ use std::process::Command;
 use std::sync::Arc;
 
 use wdpkr::indexer::IndexRun;
-use wdpkr::plugin::Plugin;
-use wdpkr::plugin::files::FilesPlugin;
 use wdpkr::search::{SearchParams, SearchRun};
 use wdpkr::store::{Namespace, VectorStore};
+use wdpkr::tap::Tap;
+use wdpkr::tap::files::FilesTap;
 use wdpkr::testing::mock_embed::MockEmbedder;
 use wdpkr::testing::mock_store::MockVectorStore;
 use wdpkr::testing::mock_summarize::MockSummarizer;
@@ -128,9 +128,9 @@ fn cleanup(dir: &Path) {
 }
 
 fn build_index_run(dir: &Path, store: MockVectorStore, embedder: MockEmbedder) -> IndexRun {
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.to_path_buf()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.to_path_buf()))];
     IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(embedder),
         Arc::new(store),
@@ -209,9 +209,9 @@ async fn index_then_search_round_trip() {
     let ns = Namespace::from("test-roundtrip");
 
     // Index
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -262,9 +262,9 @@ async fn search_finds_indexed_file_paths() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-paths");
 
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -309,9 +309,9 @@ async fn symbols_appear_nested_under_files() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-symbols");
 
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -367,9 +367,9 @@ async fn scope_filter_limits_results_after_index() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-scope");
 
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -417,9 +417,9 @@ async fn incremental_index_only_processes_changed_files() {
     let ns = Namespace::from("test-incr");
 
     // Full index
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -439,9 +439,9 @@ async fn incremental_index_only_processes_changed_files() {
     git(&dir, &["commit", "-m", "add new feature"]);
 
     // Incremental index (full=false)
-    let plugins2: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps2: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index2 = IndexRun::new(
-        plugins2,
+        taps2,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -470,9 +470,9 @@ async fn incremental_index_removes_stale_symbols() {
     let ns = Namespace::from("test-stale");
 
     // Full index — payments.rs has release_payment + process_refund
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -505,9 +505,9 @@ pub fn release_payment(payee_id: u64, amount: f64) -> Result<(), String> {
     git(&dir, &["commit", "-m", "remove process_refund"]);
 
     // Incremental index
-    let plugins2: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps2: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index2 = IndexRun::new(
-        plugins2,
+        taps2,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
@@ -536,9 +536,9 @@ async fn json_output_is_valid_after_full_pipeline() {
     let store = Arc::new(MockVectorStore::new());
     let ns = Namespace::from("test-json");
 
-    let plugins: Vec<Arc<dyn Plugin>> = vec![Arc::new(FilesPlugin::new(dir.clone()))];
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
-        plugins,
+        taps,
         Arc::new(MockSummarizer::new()),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),

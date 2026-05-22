@@ -1,4 +1,4 @@
-//! Indexer: runs plugins through the summarize → embed → upsert pipeline.
+//! Indexer: runs taps through the summarize → embed → upsert pipeline.
 
 pub mod cost;
 pub mod git;
@@ -13,12 +13,12 @@ use owo_colors::{OwoColorize, Stream};
 use tokio::sync::Semaphore;
 
 use crate::embed::{Embedder, embedder_identity};
-use crate::plugin::{FetchContext, Plugin, namespace_suffix};
 use crate::store::{ChunkKind, Namespace, NamespaceMetadata, VectorDocument, VectorStore};
 use crate::summarize::Summarizer;
+use crate::tap::{FetchContext, Tap, namespace_suffix};
 
 pub struct IndexRun {
-    plugins: Vec<Arc<dyn Plugin>>,
+    taps: Vec<Arc<dyn Tap>>,
     summarizer: Arc<dyn Summarizer>,
     embedder: Arc<dyn Embedder>,
     store: Arc<dyn VectorStore>,
@@ -39,7 +39,7 @@ pub struct IndexReport {
 
 impl IndexRun {
     pub fn new(
-        plugins: Vec<Arc<dyn Plugin>>,
+        taps: Vec<Arc<dyn Tap>>,
         summarizer: Arc<dyn Summarizer>,
         embedder: Arc<dyn Embedder>,
         store: Arc<dyn VectorStore>,
@@ -47,7 +47,7 @@ impl IndexRun {
         concurrency: usize,
     ) -> Self {
         Self {
-            plugins,
+            taps,
             summarizer,
             embedder,
             store,
@@ -56,8 +56,8 @@ impl IndexRun {
         }
     }
 
-    fn plugin_namespace(&self, plugin_name: &str) -> Namespace {
-        match namespace_suffix(plugin_name) {
+    fn tap_namespace(&self, tap_name: &str) -> Namespace {
+        match namespace_suffix(tap_name) {
             None => self.base_namespace.clone(),
             Some(suffix) => Namespace::from(format!("{}{suffix}", self.base_namespace.as_str())),
         }
@@ -71,8 +71,8 @@ impl IndexRun {
         let mut total_deleted = 0usize;
         let mut last_cursor: Option<String> = None;
 
-        for plugin in &self.plugins {
-            let ns = self.plugin_namespace(plugin.name());
+        for tap in &self.taps {
+            let ns = self.tap_namespace(tap.name());
 
             if !self.store.namespace_exists(&ns).await? {
                 self.store
@@ -102,7 +102,7 @@ impl IndexRun {
                 stored_hashes,
             };
 
-            let fetch_result = plugin.fetch(&ctx).await?;
+            let fetch_result = tap.fetch(&ctx).await?;
             let cursor = fetch_result.cursor;
 
             for path in &fetch_result.deletions {
@@ -114,8 +114,7 @@ impl IndexRun {
             let total = items.len();
             eprintln!(
                 "  [{}] {} items to process (concurrency: {})",
-                plugin
-                    .name()
+                tap.name()
                     .if_supports_color(Stream::Stderr, |s| s.magenta()),
                 total.if_supports_color(Stream::Stderr, |s| s.cyan()),
                 self.concurrency
@@ -189,12 +188,12 @@ impl IndexRun {
                 });
             }
 
-            let mut plugin_documents: Vec<VectorDocument> = Vec::new();
+            let mut tap_documents: Vec<VectorDocument> = Vec::new();
             while let Some(join_result) = join_set.join_next().await {
                 match join_result? {
                     ItemOutcome::Processed { documents } => {
                         total_processed += 1;
-                        plugin_documents.extend(documents);
+                        tap_documents.extend(documents);
                     }
                     ItemOutcome::Failed => {
                         total_failed += 1;
@@ -202,9 +201,9 @@ impl IndexRun {
                 }
             }
 
-            resolve_call_edges(&mut plugin_documents);
+            resolve_call_edges(&mut tap_documents);
 
-            let stats = self.store.upsert(&ns, &plugin_documents).await?;
+            let stats = self.store.upsert(&ns, &tap_documents).await?;
             total_upserted += stats.upserted;
 
             let new_meta = NamespaceMetadata {
@@ -319,11 +318,11 @@ pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::SourceItem;
+    use crate::tap::SourceItem;
     use crate::testing::mock_embed::MockEmbedder;
-    use crate::testing::mock_plugin::MockPlugin;
     use crate::testing::mock_store::MockVectorStore;
     use crate::testing::mock_summarize::MockSummarizer;
+    use crate::testing::mock_tap::MockTap;
 
     fn sym_doc(id: &str, file: &str, name: &str, calls: Vec<&str>) -> VectorDocument {
         VectorDocument {
@@ -438,10 +437,10 @@ mod tests {
         assert!(docs[0].called_by.is_none());
     }
 
-    // ── plugin_namespace tests ───────────────────────────────────────
+    // ── tap_namespace tests ───────────────────────────────────────
 
     #[test]
-    fn plugin_namespace_files_uses_base() {
+    fn tap_namespace_files_uses_base() {
         let run = IndexRun::new(
             vec![],
             Arc::new(MockSummarizer::new()),
@@ -450,11 +449,11 @@ mod tests {
             Namespace::from("my-repo"),
             1,
         );
-        assert_eq!(run.plugin_namespace("files").as_str(), "my-repo");
+        assert_eq!(run.tap_namespace("files").as_str(), "my-repo");
     }
 
     #[test]
-    fn plugin_namespace_other_appends_suffix() {
+    fn tap_namespace_other_appends_suffix() {
         let run = IndexRun::new(
             vec![],
             Arc::new(MockSummarizer::new()),
@@ -463,18 +462,18 @@ mod tests {
             Namespace::from("my-repo"),
             1,
         );
-        assert_eq!(run.plugin_namespace("linear").as_str(), "my-repo--linear");
+        assert_eq!(run.tap_namespace("linear").as_str(), "my-repo--linear");
     }
 
     // ── IndexRun integration tests ───────────────────────────────────
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
-    async fn index_run_processes_items_from_plugin() {
+    async fn index_run_processes_items_from_tap() {
         let store = Arc::new(MockVectorStore::new());
-        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", sample_items()));
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::new("files", sample_items()));
         let run = IndexRun::new(
-            vec![plugin],
+            vec![tap],
             Arc::new(MockSummarizer::new()),
             Arc::new(MockEmbedder::new(8)),
             store.clone(),
@@ -517,13 +516,13 @@ mod tests {
             .await
             .unwrap();
 
-        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::with_deletions(
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::with_deletions(
             "files",
             vec![],
             vec!["deleted.rs".into()],
         ));
         let run = IndexRun::new(
-            vec![plugin],
+            vec![tap],
             Arc::new(MockSummarizer::new()),
             Arc::new(MockEmbedder::new(8)),
             store.clone(),
@@ -545,9 +544,9 @@ mod tests {
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
-    async fn index_run_multiple_plugins_separate_namespaces() {
+    async fn index_run_multiple_taps_separate_namespaces() {
         let store = Arc::new(MockVectorStore::new());
-        let files_plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new(
+        let files_tap: Arc<dyn Tap> = Arc::new(MockTap::new(
             "files",
             vec![SourceItem {
                 source_path: "a.rs".into(),
@@ -557,7 +556,7 @@ mod tests {
                 children: vec![],
             }],
         ));
-        let linear_plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new(
+        let linear_tap: Arc<dyn Tap> = Arc::new(MockTap::new(
             "linear",
             vec![SourceItem {
                 source_path: "linear://ENG-1".into(),
@@ -568,7 +567,7 @@ mod tests {
             }],
         ));
         let run = IndexRun::new(
-            vec![files_plugin, linear_plugin],
+            vec![files_tap, linear_tap],
             Arc::new(MockSummarizer::new()),
             Arc::new(MockEmbedder::new(8)),
             store.clone(),
@@ -596,13 +595,13 @@ mod tests {
     #[tokio::test]
     async fn index_run_persists_cursor_in_metadata() {
         let store = Arc::new(MockVectorStore::new());
-        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::with_cursor(
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::with_cursor(
             "files",
             sample_items(),
             "abc123def".into(),
         ));
         let run = IndexRun::new(
-            vec![plugin],
+            vec![tap],
             Arc::new(MockSummarizer::new()),
             Arc::new(MockEmbedder::new(8)),
             store.clone(),
@@ -638,9 +637,9 @@ mod tests {
             .await
             .unwrap();
 
-        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", vec![]));
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::new("files", vec![]));
         let run = IndexRun::new(
-            vec![plugin],
+            vec![tap],
             Arc::new(MockSummarizer::new()),
             Arc::new(MockEmbedder::new(8)),
             store,
@@ -675,9 +674,9 @@ mod tests {
             .await
             .unwrap();
 
-        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", sample_items()));
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::new("files", sample_items()));
         let run = IndexRun::new(
-            vec![plugin],
+            vec![tap],
             Arc::new(MockSummarizer::new()),
             Arc::new(MockEmbedder::new(8)),
             store,
@@ -691,11 +690,11 @@ mod tests {
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
-    async fn index_run_empty_plugin_no_errors() {
+    async fn index_run_empty_tap_no_errors() {
         let store = Arc::new(MockVectorStore::new());
-        let plugin: Arc<dyn Plugin> = Arc::new(MockPlugin::new("files", vec![]));
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::new("files", vec![]));
         let run = IndexRun::new(
-            vec![plugin],
+            vec![tap],
             Arc::new(MockSummarizer::new()),
             Arc::new(MockEmbedder::new(8)),
             store,

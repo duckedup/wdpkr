@@ -85,8 +85,8 @@ impl SearchRun {
     }
 
     /// Multi-namespace constructor. Each entry is (namespace, source_label).
-    /// The source label is `None` for the files plugin (omitted from JSON)
-    /// and `Some("linear")` etc. for external plugins.
+    /// The source label is `None` for the files tap (omitted from JSON)
+    /// and `Some("linear")` etc. for external taps.
     pub fn new_multi(
         embedder: Box<dyn Embedder>,
         store: Box<dyn VectorStore>,
@@ -192,8 +192,8 @@ impl SearchRun {
 
 /// Group flat search results into a tiered file → symbols structure.
 ///
-/// Results carry an optional source label (plugin name). For the files
-/// plugin this is `None` (omitted from JSON); for external plugins it's
+/// Results carry an optional source label (tap name). For the files
+/// tap this is `None` (omitted from JSON); for external taps it's
 /// `Some("linear")` etc.
 fn group_results_multi(
     results: &[(SearchResult, Option<String>)],

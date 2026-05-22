@@ -4,10 +4,10 @@ use clap::Args;
 use crate::config::Config;
 use crate::embed::build_embedder;
 use crate::indexer::resolve_namespace;
-use crate::plugin::namespace_suffix;
 use crate::search::output;
 use crate::search::{SearchParams, SearchRun};
 use crate::store::{Namespace, build_store};
+use crate::tap::namespace_suffix;
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
@@ -61,7 +61,7 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     };
 
     let namespaces: Vec<(Namespace, Option<String>)> = config
-        .plugins
+        .taps
         .iter()
         .map(|p| {
             let ns = match namespace_suffix(&p.name) {

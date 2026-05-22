@@ -1,4 +1,4 @@
-//! Subprocess plugin adapter: spawns an external executable and
+//! Subprocess tap adapter: spawns an external executable and
 //! communicates via JSON over stdin/stdout.
 
 use std::collections::HashMap;
@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use super::{FetchContext, FetchResult, Plugin, SourceItem};
+use super::{FetchContext, FetchResult, SourceItem, Tap};
 
-pub struct ProcessPlugin {
+pub struct ProcessTap {
     name: String,
     command: String,
     args: Vec<String>,
@@ -45,7 +45,7 @@ struct FetchResponse {
     cursor: Option<String>,
 }
 
-impl ProcessPlugin {
+impl ProcessTap {
     pub fn new(
         name: String,
         command: String,
@@ -63,7 +63,7 @@ impl ProcessPlugin {
 }
 
 #[async_trait]
-impl Plugin for ProcessPlugin {
+impl Tap for ProcessTap {
     fn name(&self) -> &str {
         &self.name
     }
@@ -86,9 +86,9 @@ impl Plugin for ProcessPlugin {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
             .spawn()
-            .with_context(|| format!("spawning plugin '{}': {}", self.name, self.command))?;
+            .with_context(|| format!("spawning tap '{}': {}", self.name, self.command))?;
 
-        let mut stdin = child.stdin.take().context("opening plugin stdin")?;
+        let mut stdin = child.stdin.take().context("opening tap stdin")?;
         stdin.write_all(request_json.as_bytes()).await?;
         stdin.shutdown().await?;
         drop(stdin);
@@ -97,12 +97,12 @@ impl Plugin for ProcessPlugin {
             .await
             .with_context(|| {
                 format!(
-                    "plugin '{}' timed out after {}s",
+                    "tap '{}' timed out after {}s",
                     self.name,
                     self.timeout.as_secs()
                 )
             })?
-            .with_context(|| format!("waiting for plugin '{}'", self.name))?;
+            .with_context(|| format!("waiting for tap '{}'", self.name))?;
 
         if !output.status.success() {
             let code = output
@@ -110,15 +110,15 @@ impl Plugin for ProcessPlugin {
                 .code()
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".into());
-            bail!("plugin '{}' exited with code {code}", self.name,);
+            bail!("tap '{}' exited with code {code}", self.name,);
         }
 
         let stdout = String::from_utf8(output.stdout)
-            .with_context(|| format!("plugin '{}' stdout is not valid UTF-8", self.name))?;
+            .with_context(|| format!("tap '{}' stdout is not valid UTF-8", self.name))?;
 
         let response: FetchResponse = serde_json::from_str(&stdout).with_context(|| {
             format!(
-                "plugin '{}' returned invalid JSON: {}",
+                "tap '{}' returned invalid JSON: {}",
                 self.name,
                 if stdout.len() > 200 {
                     format!("{}...", &stdout[..200])
@@ -151,8 +151,8 @@ printf '%s' '{}'
         ("sh".into(), vec!["-c".into(), script])
     }
 
-    fn make_plugin(command: &str, args: Vec<String>) -> ProcessPlugin {
-        ProcessPlugin::new("test-plugin".into(), command.into(), args, HashMap::new())
+    fn make_tap(command: &str, args: Vec<String>) -> ProcessTap {
+        ProcessTap::new("test-tap".into(), command.into(), args, HashMap::new())
     }
 
     fn default_ctx() -> FetchContext {
@@ -168,8 +168,8 @@ printf '%s' '{}'
     async fn fetch_parses_valid_response() {
         let json = r#"{"items":[{"source_path":"test.txt","content":"hello","content_hash":"h1","children":[]}],"deletions":[],"cursor":"c1"}"#;
         let (cmd, args) = echo_script(json);
-        let plugin = make_plugin(&cmd, args);
-        let result = plugin.fetch(&default_ctx()).await.unwrap();
+        let tap = make_tap(&cmd, args);
+        let result = tap.fetch(&default_ctx()).await.unwrap();
 
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].source_path, "test.txt");
@@ -182,8 +182,8 @@ printf '%s' '{}'
     async fn fetch_with_deletions() {
         let json = r#"{"items":[],"deletions":["old.txt"]}"#;
         let (cmd, args) = echo_script(json);
-        let plugin = make_plugin(&cmd, args);
-        let result = plugin.fetch(&default_ctx()).await.unwrap();
+        let tap = make_tap(&cmd, args);
+        let result = tap.fetch(&default_ctx()).await.unwrap();
 
         assert!(result.items.is_empty());
         assert_eq!(result.deletions, vec!["old.txt"]);
@@ -192,19 +192,19 @@ printf '%s' '{}'
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn nonzero_exit_code_errors() {
-        let plugin = make_plugin("sh", vec!["-c".into(), "exit 1".into()]);
-        let err = plugin.fetch(&default_ctx()).await.unwrap_err();
+        let tap = make_tap("sh", vec!["-c".into(), "exit 1".into()]);
+        let err = tap.fetch(&default_ctx()).await.unwrap_err();
         assert!(err.to_string().contains("exited with code 1"), "got: {err}");
     }
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn invalid_json_errors() {
-        let plugin = make_plugin(
+        let tap = make_tap(
             "sh",
             vec!["-c".into(), "cat >/dev/null; echo 'not json'".into()],
         );
-        let err = plugin.fetch(&default_ctx()).await.unwrap_err();
+        let err = tap.fetch(&default_ctx()).await.unwrap_err();
         assert!(err.to_string().contains("invalid JSON"), "got: {err}");
     }
 
@@ -222,53 +222,53 @@ printf '{"items":[],"deletions":[]}'
             "api_key_env".into(),
             serde_yaml::Value::String("MY_KEY".into()),
         );
-        let mut plugin = ProcessPlugin::new(
+        let mut tap = ProcessTap::new(
             "test".into(),
             "sh".into(),
             vec!["-c".into(), script.into()],
             settings,
         );
-        plugin.timeout = Duration::from_secs(5);
+        tap.timeout = Duration::from_secs(5);
 
-        let result = plugin.fetch(&default_ctx()).await.unwrap();
+        let result = tap.fetch(&default_ctx()).await.unwrap();
         assert!(result.items.is_empty());
     }
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn timeout_errors() {
-        let mut plugin = make_plugin("sh", vec!["-c".into(), "cat >/dev/null; sleep 10".into()]);
-        plugin.timeout = Duration::from_secs(1);
+        let mut tap = make_tap("sh", vec!["-c".into(), "cat >/dev/null; sleep 10".into()]);
+        tap.timeout = Duration::from_secs(1);
 
-        let err = plugin.fetch(&default_ctx()).await.unwrap_err();
+        let err = tap.fetch(&default_ctx()).await.unwrap_err();
         assert!(err.to_string().contains("timed out"), "got: {err}");
     }
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn missing_command_errors() {
-        let plugin = make_plugin("/nonexistent/plugin-binary-that-does-not-exist", vec![]);
-        let err = plugin.fetch(&default_ctx()).await.unwrap_err();
-        assert!(err.to_string().contains("spawning plugin"), "got: {err}");
+        let tap = make_tap("/nonexistent/tap-binary-that-does-not-exist", vec![]);
+        let err = tap.fetch(&default_ctx()).await.unwrap_err();
+        assert!(err.to_string().contains("spawning tap"), "got: {err}");
     }
 
     #[test]
-    fn plugin_name() {
-        let plugin = ProcessPlugin::new(
-            "my-plugin".into(),
+    fn tap_name() {
+        let tap = ProcessTap::new(
+            "my-tap".into(),
             "/usr/bin/thing".into(),
             vec![],
             HashMap::new(),
         );
-        assert_eq!(plugin.name(), "my-plugin");
+        assert_eq!(tap.name(), "my-tap");
     }
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn empty_response_defaults() {
         let (cmd, args) = echo_script("{}");
-        let plugin = make_plugin(&cmd, args);
-        let result = plugin.fetch(&default_ctx()).await.unwrap();
+        let tap = make_tap(&cmd, args);
+        let result = tap.fetch(&default_ctx()).await.unwrap();
 
         assert!(result.items.is_empty());
         assert!(result.deletions.is_empty());
