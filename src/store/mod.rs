@@ -1,20 +1,56 @@
 //! Vector store abstraction.
 //!
-//! Defines the [`VectorStore`] trait and its supporting types. v1 ships a
-//! single Turbopuffer adapter (`turbopuffer.rs`, separate issue); the trait
-//! is designed for swap-in of other backends (Qdrant, Milvus, local FAISS).
+//! Defines the [`VectorStore`] trait for runtime operations, the
+//! [`StoreProvider`] trait for backend registration, and a provider
+//! registry that resolves config strings to concrete implementations.
 //!
-//! Implementation tracks root `SPEC.md` § VectorStore trait.
+//! Adding a new backend:
+//! 1. Create a module implementing `VectorStore` + `StoreProvider`
+//! 2. Register one line in [`providers()`]
 
 pub mod turbopuffer;
 
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-// ── Trait ─────────────────────────────────────────────────────────────────
+use crate::config::StoreConfig;
+
+// ── StoreProvider ────────────────────────────────────────────────────────
+
+pub trait StoreProvider: Send + Sync {
+    fn name(&self) -> &str;
+    fn validate(&self, config: &StoreConfig) -> Result<()>;
+    fn build(&self, config: &StoreConfig, dimension: usize) -> Result<Box<dyn VectorStore>>;
+}
+
+// ── Provider registry ────────────────────────────────────────────────────
+
+fn providers() -> Vec<Box<dyn StoreProvider>> {
+    vec![Box::new(turbopuffer::TurbopufferProvider)]
+}
+
+pub fn resolve_provider(name: &str) -> Result<Box<dyn StoreProvider>> {
+    let needle = name.to_lowercase();
+    let all = providers();
+    let found = all.into_iter().find(|p| p.name() == needle);
+    found.ok_or_else(|| {
+        let available: Vec<String> = providers().iter().map(|p| p.name().to_string()).collect();
+        anyhow!(
+            "unknown store provider '{name}'. available: {}",
+            available.join(", ")
+        )
+    })
+}
+
+pub fn build_store(config: &StoreConfig, dimension: usize) -> Result<Box<dyn VectorStore>> {
+    let provider = resolve_provider(&config.provider)?;
+    provider.build(config, dimension)
+}
+
+// ── VectorStore trait ────────────────────────────────────────────────────
 
 #[async_trait]
 pub trait VectorStore: Send + Sync {
@@ -204,8 +240,6 @@ pub struct UpsertStats {
     pub skipped: usize,
 }
 
-pub use turbopuffer::build_store;
-
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -358,5 +392,59 @@ mod tests {
         assert_eq!(map.get(&Namespace::from("repo-a")), Some(&1));
         assert_eq!(map.get(&Namespace::from("repo-b")), Some(&2));
         assert_eq!(map.get(&Namespace::from("repo-c")), None);
+    }
+
+    // ── Provider registry ────────────────────────────────────────────
+
+    #[test]
+    fn resolve_provider_turbopuffer() {
+        let p = resolve_provider("turbopuffer").unwrap();
+        assert_eq!(p.name(), "turbopuffer");
+    }
+
+    #[test]
+    fn resolve_provider_case_insensitive() {
+        let p = resolve_provider("Turbopuffer").unwrap();
+        assert_eq!(p.name(), "turbopuffer");
+
+        let p = resolve_provider("TURBOPUFFER").unwrap();
+        assert_eq!(p.name(), "turbopuffer");
+    }
+
+    #[test]
+    fn resolve_provider_unknown_errors() {
+        let result = resolve_provider("qdrant");
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("unknown store provider"));
+        assert!(msg.contains("turbopuffer"));
+    }
+
+    // ── Factory ──────────────────────────────────────────────────────
+
+    #[test]
+    fn build_store_turbopuffer() {
+        let config = StoreConfig {
+            provider: "turbopuffer".into(),
+            api_key: "key".into(),
+        };
+        assert!(build_store(&config, 1024).is_ok());
+    }
+
+    #[test]
+    fn build_store_unknown_provider() {
+        let config = StoreConfig {
+            provider: "qdrant".into(),
+            api_key: "key".into(),
+        };
+        let result = build_store(&config, 1024);
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("unknown store provider")
+        );
     }
 }

@@ -12,14 +12,37 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChunkKind, Namespace, NamespaceMetadata, SearchOptions, SearchResult, UpsertStats,
-    VectorDocument, VectorStore,
+    ChunkKind, Namespace, NamespaceMetadata, SearchOptions, SearchResult, StoreProvider,
+    UpsertStats, VectorDocument, VectorStore,
 };
 use crate::config::StoreConfig;
 
 const META_VECTOR_ID: &str = "__wdpkr_meta__";
 const MAX_RETRIES: usize = 3;
 const UPSERT_BATCH_SIZE: usize = 200;
+
+// ── Provider ─────────────────────────────────────────────────────────────
+
+pub struct TurbopufferProvider;
+
+impl StoreProvider for TurbopufferProvider {
+    fn name(&self) -> &str {
+        "turbopuffer"
+    }
+
+    fn validate(&self, config: &StoreConfig) -> Result<()> {
+        if config.api_key.is_empty() {
+            bail!("TURBOPUFFER_API_KEY is required when store.provider=turbopuffer");
+        }
+        Ok(())
+    }
+
+    fn build(&self, config: &StoreConfig, dimension: usize) -> Result<Box<dyn VectorStore>> {
+        Ok(Box::new(TurbopufferStore::new(config, dimension)?))
+    }
+}
+
+// ── Store ────────────────────────────────────────────────────────────────
 
 pub struct TurbopufferStore {
     client: reqwest::Client,
@@ -658,15 +681,6 @@ fn backoff(attempt: usize) -> Duration {
     Duration::from_millis(1000 * 2u64.pow(attempt as u32))
 }
 
-// ── build_store factory ───────────────────────────────────────────────────
-
-pub fn build_store(config: &StoreConfig, dimension: usize) -> Result<Box<dyn VectorStore>> {
-    match config.provider.as_str() {
-        "turbopuffer" => Ok(Box::new(TurbopufferStore::new(config, dimension)?)),
-        other => bail!("store provider '{other}' is not yet implemented"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,33 +987,39 @@ mod tests {
         assert!((1.0f32 - 2.0 - (-1.0)).abs() < f32::EPSILON);
     }
 
-    // ── Factory ───────────────────────────────────────────────────────
+    // ── TurbopufferProvider ─────────────────────────────────────────
 
     #[test]
-    fn factory_turbopuffer_with_key() {
+    fn provider_name() {
+        assert_eq!(TurbopufferProvider.name(), "turbopuffer");
+    }
+
+    #[test]
+    fn provider_validate_with_key() {
         let config = StoreConfig {
             provider: "turbopuffer".into(),
             api_key: "key".into(),
         };
-        assert!(build_store(&config, 1024).is_ok());
+        assert!(TurbopufferProvider.validate(&config).is_ok());
     }
 
     #[test]
-    fn factory_turbopuffer_without_key_errors() {
+    fn provider_validate_without_key() {
         let config = StoreConfig {
             provider: "turbopuffer".into(),
             api_key: String::new(),
         };
-        assert!(build_store(&config, 1024).is_err());
+        let err = TurbopufferProvider.validate(&config).unwrap_err();
+        assert!(err.to_string().contains("TURBOPUFFER_API_KEY"));
     }
 
     #[test]
-    fn factory_unknown_provider_errors() {
+    fn provider_build_succeeds() {
         let config = StoreConfig {
-            provider: "qdrant".into(),
+            provider: "turbopuffer".into(),
             api_key: "key".into(),
         };
-        assert!(build_store(&config, 1024).is_err());
+        assert!(TurbopufferProvider.build(&config, 1024).is_ok());
     }
 
     // ── Search filter construction ───────────────────────────────────

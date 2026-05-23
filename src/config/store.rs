@@ -1,8 +1,17 @@
+use anyhow::Result;
+
 use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 
 pub struct StoreConfig {
     pub provider: String,
     pub api_key: String,
+}
+
+impl StoreConfig {
+    pub fn validate(&self) -> Result<()> {
+        let provider = crate::store::resolve_provider(&self.provider)?;
+        provider.validate(self)
+    }
 }
 
 /// Per-field source attribution paralleling [`StoreConfig`].
@@ -152,5 +161,36 @@ mod tests {
         assert_eq!(sources.provider, Source::Env("WDPKR_STORE_PROVIDER"));
         assert_eq!(sources.api_key, Source::Env("TURBOPUFFER_API_KEY"));
         clear_env();
+    }
+
+    // ── Validation ───────────────────────────────────────────────────
+
+    #[test]
+    fn validate_passes_turbopuffer_with_key() {
+        let cfg = StoreConfig {
+            provider: "turbopuffer".into(),
+            api_key: "key-123".into(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_fails_turbopuffer_without_key() {
+        let cfg = StoreConfig {
+            provider: "turbopuffer".into(),
+            api_key: String::new(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("TURBOPUFFER_API_KEY"));
+    }
+
+    #[test]
+    fn validate_fails_unknown_provider() {
+        let cfg = StoreConfig {
+            provider: "qdrant".into(),
+            api_key: "key".into(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("unknown store provider"));
     }
 }

@@ -45,6 +45,7 @@ pub struct SearchArgs {
 
 pub async fn run(args: SearchArgs) -> Result<()> {
     let config = Config::new()?;
+    config.store.validate()?;
     config.embed.validate()?;
 
     let namespace = resolve_namespace(&config)?;

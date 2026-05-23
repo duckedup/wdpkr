@@ -43,6 +43,7 @@ pub async fn run(args: EvalArgs) -> Result<()> {
     }
 
     let config = Config::new()?;
+    config.store.validate()?;
     config.embed.validate()?;
 
     let namespace = resolve_namespace(&config)?;
