@@ -26,6 +26,7 @@ pub fn render_json(report: &SearchReport, terse: bool) -> Result<String> {
                 path: f.path.clone(),
                 score: f.score,
                 summary: None,
+                source: f.source.clone(),
                 symbols: f
                     .symbols
                     .iter()
@@ -228,6 +229,7 @@ mod tests {
                     path: "src/finance/commission.rs".into(),
                     score: 0.87,
                     summary: Some("Commission payment release service".into()),
+                    source: None,
                     symbols: vec![
                         SymbolResult {
                             name: "release_payment".into(),
@@ -253,6 +255,7 @@ mod tests {
                     path: "src/auth/login.rs".into(),
                     score: 0.72,
                     summary: Some("Authentication and session management".into()),
+                    source: None,
                     symbols: vec![SymbolResult {
                         name: "authenticate".into(),
                         kind: "function".into(),
@@ -350,6 +353,7 @@ mod tests {
                 path: "a.rs".into(),
                 score: 0.5,
                 summary: Some("A file".into()),
+                source: None,
                 symbols: vec![SymbolResult {
                     name: "only_one".into(),
                     kind: "function".into(),
@@ -393,6 +397,7 @@ mod tests {
                 path: "a.rs".into(),
                 score: 0.9,
                 summary: Some("File summary here.".into()),
+                source: None,
                 symbols: vec![SymbolResult {
                     name: "func".into(),
                     kind: "function".into(),

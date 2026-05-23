@@ -123,6 +123,7 @@ mod tests {
                 path: "a.rs".into(),
                 score: 0.9,
                 summary: Some("A file summary".into()),
+                source: None,
                 symbols: vec![],
             }],
         };
@@ -197,6 +198,7 @@ mod tests {
                 path: "a.rs".into(),
                 score: 0.9,
                 summary: Some("Module summary".into()),
+                source: None,
                 symbols: vec![SymbolResult {
                     name: "foo".into(),
                     kind: "function".into(),

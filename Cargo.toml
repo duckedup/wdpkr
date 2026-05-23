@@ -1,6 +1,6 @@
 [package]
 name = "wdpkr"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
@@ -27,7 +27,7 @@ owo-colors = { version = "4", features = ["supports-colors"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "io-util", "time"] }
 tree-sitter = "0.24"
 tree-sitter-language = "0.1"
 tree-sitter-rust = "0.23"
