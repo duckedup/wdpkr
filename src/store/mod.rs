@@ -8,6 +8,7 @@
 //! 1. Create a module implementing `VectorStore` + `StoreProvider`
 //! 2. Register one line in [`providers()`]
 
+pub mod lancedb;
 pub mod turbopuffer;
 
 use std::collections::HashMap;
@@ -29,7 +30,10 @@ pub trait StoreProvider: Send + Sync {
 // ── Provider registry ────────────────────────────────────────────────────
 
 fn providers() -> Vec<Box<dyn StoreProvider>> {
-    vec![Box::new(turbopuffer::TurbopufferProvider)]
+    vec![
+        Box::new(turbopuffer::TurbopufferProvider),
+        Box::new(lancedb::LancedbProvider),
+    ]
 }
 
 pub fn resolve_provider(name: &str) -> Result<Box<dyn StoreProvider>> {
@@ -412,32 +416,44 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provider_lancedb() {
+        let p = resolve_provider("lancedb").unwrap();
+        assert_eq!(p.name(), "lancedb");
+    }
+
+    #[test]
     fn resolve_provider_unknown_errors() {
         let result = resolve_provider("qdrant");
         assert!(result.is_err());
         let msg = result.err().unwrap().to_string();
         assert!(msg.contains("unknown store provider"));
         assert!(msg.contains("turbopuffer"));
+        assert!(msg.contains("lancedb"));
     }
 
     // ── Factory ──────────────────────────────────────────────────────
 
+    fn test_config(provider: &str, api_key: &str) -> StoreConfig {
+        use crate::config::{LancedbStoreConfig, TurbopufferStoreConfig};
+        StoreConfig {
+            provider: provider.into(),
+            turbopuffer: TurbopufferStoreConfig {
+                api_key: api_key.into(),
+            },
+            lancedb: LancedbStoreConfig {
+                data_path: String::new(),
+            },
+        }
+    }
+
     #[test]
     fn build_store_turbopuffer() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: "key".into(),
-        };
-        assert!(build_store(&config, 1024).is_ok());
+        assert!(build_store(&test_config("turbopuffer", "key"), 1024).is_ok());
     }
 
     #[test]
     fn build_store_unknown_provider() {
-        let config = StoreConfig {
-            provider: "qdrant".into(),
-            api_key: "key".into(),
-        };
-        let result = build_store(&config, 1024);
+        let result = build_store(&test_config("qdrant", "key"), 1024);
         assert!(result.is_err());
         assert!(
             result

@@ -31,7 +31,7 @@ impl StoreProvider for TurbopufferProvider {
     }
 
     fn validate(&self, config: &StoreConfig) -> Result<()> {
-        if config.api_key.is_empty() {
+        if config.turbopuffer.api_key.is_empty() {
             bail!("TURBOPUFFER_API_KEY is required when store.provider=turbopuffer");
         }
         Ok(())
@@ -53,12 +53,12 @@ pub struct TurbopufferStore {
 
 impl TurbopufferStore {
     pub fn new(config: &StoreConfig, dimension: usize) -> Result<Self> {
-        if config.api_key.is_empty() {
+        if config.turbopuffer.api_key.is_empty() {
             bail!("TURBOPUFFER_API_KEY is required");
         }
         Ok(Self {
             client: reqwest::Client::new(),
-            api_key: config.api_key.clone(),
+            api_key: config.turbopuffer.api_key.clone(),
             base_url: "https://api.turbopuffer.com".into(),
             dimension,
         })
@@ -684,36 +684,37 @@ fn backoff(attempt: usize) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{LancedbStoreConfig, TurbopufferStoreConfig};
+
+    fn test_config(api_key: &str) -> StoreConfig {
+        StoreConfig {
+            provider: "turbopuffer".into(),
+            turbopuffer: TurbopufferStoreConfig {
+                api_key: api_key.into(),
+            },
+            lancedb: LancedbStoreConfig {
+                data_path: String::new(),
+            },
+        }
+    }
 
     // ── Constructor ───────────────────────────────────────────────────
 
     #[test]
     fn requires_api_key() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: String::new(),
-        };
-        assert!(TurbopufferStore::new(&config, 1024).is_err());
+        assert!(TurbopufferStore::new(&test_config(""), 1024).is_err());
     }
 
     #[test]
     fn constructs_with_key() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: "test-key".into(),
-        };
-        let store = TurbopufferStore::new(&config, 1024).unwrap();
+        let store = TurbopufferStore::new(&test_config("test-key"), 1024).unwrap();
         assert_eq!(store.base_url, "https://api.turbopuffer.com");
         assert_eq!(store.dimension, 1024);
     }
 
     #[test]
     fn custom_base_url() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: "key".into(),
-        };
-        let store = TurbopufferStore::new(&config, 512)
+        let store = TurbopufferStore::new(&test_config("key"), 512)
             .unwrap()
             .with_base_url("http://localhost:9090");
         assert_eq!(store.base_url, "http://localhost:9090");
@@ -723,10 +724,7 @@ mod tests {
 
     #[test]
     fn namespace_url() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: "key".into(),
-        };
+        let config = test_config("key");
         let store = TurbopufferStore::new(&config, 1024).unwrap();
         let ns = Namespace::from("my-repo");
         assert_eq!(
@@ -996,30 +994,18 @@ mod tests {
 
     #[test]
     fn provider_validate_with_key() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: "key".into(),
-        };
-        assert!(TurbopufferProvider.validate(&config).is_ok());
+        assert!(TurbopufferProvider.validate(&test_config("key")).is_ok());
     }
 
     #[test]
     fn provider_validate_without_key() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: String::new(),
-        };
-        let err = TurbopufferProvider.validate(&config).unwrap_err();
+        let err = TurbopufferProvider.validate(&test_config("")).unwrap_err();
         assert!(err.to_string().contains("TURBOPUFFER_API_KEY"));
     }
 
     #[test]
     fn provider_build_succeeds() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: "key".into(),
-        };
-        assert!(TurbopufferProvider.build(&config, 1024).is_ok());
+        assert!(TurbopufferProvider.build(&test_config("key"), 1024).is_ok());
     }
 
     // ── Search filter construction ───────────────────────────────────

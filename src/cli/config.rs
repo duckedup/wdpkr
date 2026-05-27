@@ -58,8 +58,23 @@ async fn run_init() -> Result<()> {
     println!("wdpkr config init — setting up ~/.config/wdpkr/config.yaml\n");
 
     // ── Vector store ──
-    let store_provider = prompt_choice("Vector store provider", &["turbopuffer"], "turbopuffer")?;
-    let turbopuffer_key = prompt_secret("Turbopuffer API key (TURBOPUFFER_API_KEY)")?;
+    let store_provider = prompt_choice(
+        "Vector store provider",
+        &["turbopuffer", "lancedb"],
+        "turbopuffer",
+    )?;
+    let turbopuffer_key = if store_provider == "turbopuffer" {
+        prompt_secret("Turbopuffer API key (TURBOPUFFER_API_KEY)")?
+    } else {
+        String::new()
+    };
+    let lancedb_data_path = if store_provider == "lancedb" {
+        let path =
+            super::prompt::prompt_freetext("LanceDB data path (leave empty for default)", "")?;
+        non_empty(path)
+    } else {
+        None
+    };
 
     // ── Embedder ──
     let embed_provider = prompt_choice(
@@ -106,7 +121,11 @@ async fn run_init() -> Result<()> {
     let file_config = FileConfig {
         store: Some(crate::config::FileStoreConfig {
             provider: Some(store_provider),
-            turbopuffer_api_key: non_empty(turbopuffer_key),
+            turbopuffer_api_key: None,
+            turbopuffer: non_empty(turbopuffer_key)
+                .map(|k| crate::config::FileTurbopufferConfig { api_key: Some(k) }),
+            lancedb: lancedb_data_path
+                .map(|p| crate::config::FileLancedbConfig { data_path: Some(p) }),
         }),
         embedder: Some(crate::config::FileEmbedConfig {
             provider: Some(embed_provider),
@@ -263,7 +282,10 @@ mod tests {
         let file_config = FileConfig {
             store: Some(crate::config::FileStoreConfig {
                 provider: Some("turbopuffer".into()),
-                turbopuffer_api_key: Some("tp-key-123".into()),
+                turbopuffer: Some(crate::config::FileTurbopufferConfig {
+                    api_key: Some("tp-key-123".into()),
+                }),
+                ..Default::default()
             }),
             embedder: Some(crate::config::FileEmbedConfig {
                 provider: Some("voyage".into()),
@@ -298,7 +320,10 @@ mod tests {
         let file_config = FileConfig {
             store: Some(crate::config::FileStoreConfig {
                 provider: Some("turbopuffer".into()),
-                turbopuffer_api_key: Some("file-tp-key".into()),
+                turbopuffer: Some(crate::config::FileTurbopufferConfig {
+                    api_key: Some("file-tp-key".into()),
+                }),
+                ..Default::default()
             }),
             summarizer: Some(crate::config::FileSummarizerConfig {
                 anthropic_api_key: Some("file-ant-key".into()),
@@ -309,7 +334,7 @@ mod tests {
         file_config.save().unwrap();
 
         let resolved = ResolvedConfig::new().unwrap();
-        assert_eq!(resolved.config.store.api_key, "file-tp-key");
+        assert_eq!(resolved.config.store.turbopuffer.api_key, "file-tp-key");
         assert_eq!(resolved.config.summarizer.api_key, "file-ant-key");
 
         teardown(&tmp);
@@ -322,7 +347,9 @@ mod tests {
         let tmp = clear_and_setup("key-env-override");
         let file_config = FileConfig {
             store: Some(crate::config::FileStoreConfig {
-                turbopuffer_api_key: Some("file-key".into()),
+                turbopuffer: Some(crate::config::FileTurbopufferConfig {
+                    api_key: Some("file-key".into()),
+                }),
                 ..Default::default()
             }),
             ..Default::default()
@@ -331,9 +358,9 @@ mod tests {
 
         set_env("TURBOPUFFER_API_KEY", "env-key");
         let resolved = ResolvedConfig::new().unwrap();
-        assert_eq!(resolved.config.store.api_key, "env-key");
+        assert_eq!(resolved.config.store.turbopuffer.api_key, "env-key");
         assert_eq!(
-            resolved.sources.store.api_key,
+            resolved.sources.store.turbopuffer.api_key,
             crate::config::Source::Env("TURBOPUFFER_API_KEY")
         );
 

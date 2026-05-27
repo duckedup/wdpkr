@@ -4,7 +4,16 @@ use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 
 pub struct StoreConfig {
     pub provider: String,
+    pub turbopuffer: TurbopufferStoreConfig,
+    pub lancedb: LancedbStoreConfig,
+}
+
+pub struct TurbopufferStoreConfig {
     pub api_key: String,
+}
+
+pub struct LancedbStoreConfig {
+    pub data_path: String,
 }
 
 impl StoreConfig {
@@ -18,7 +27,32 @@ impl StoreConfig {
 #[derive(Debug, Clone)]
 pub struct StoreSources {
     pub provider: Source,
+    pub turbopuffer: TurbopufferStoreSources,
+    pub lancedb: LancedbStoreSources,
+}
+
+#[derive(Debug, Clone)]
+pub struct TurbopufferStoreSources {
     pub api_key: Source,
+}
+
+#[derive(Debug, Clone)]
+pub struct LancedbStoreSources {
+    pub data_path: Source,
+}
+
+fn default_data_path() -> String {
+    let base = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        std::path::PathBuf::from(xdg)
+    } else if let Some(home) = dirs::home_dir() {
+        home.join(".local").join("share")
+    } else {
+        std::path::PathBuf::from(".local/share")
+    };
+    base.join("wdpkr")
+        .join("lancedb")
+        .to_string_lossy()
+        .into_owned()
 }
 
 impl StoreConfig {
@@ -35,19 +69,46 @@ impl StoreConfig {
             "WDPKR_STORE_PROVIDER",
             file_or_resolved(f.and_then(|s| s.provider.clone()), "turbopuffer".into()),
         );
+
+        // Turbopuffer API key: new nested key takes precedence over legacy flat key.
+        let nested_api_key = f
+            .and_then(|s| s.turbopuffer.as_ref())
+            .and_then(|t| t.api_key.clone());
+        let legacy_api_key = f.and_then(|s| s.turbopuffer_api_key.clone());
+        let file_api_key = nested_api_key.or(legacy_api_key);
+
         let api_key: Resolved<String> = env_or_resolved(
             "TURBOPUFFER_API_KEY",
-            file_or_resolved(f.and_then(|s| s.turbopuffer_api_key.clone()), String::new()),
+            file_or_resolved(file_api_key, String::new()),
+        );
+
+        let data_path: Resolved<String> = env_or_resolved(
+            "WDPKR_STORE_PATH",
+            file_or_resolved(
+                f.and_then(|s| s.lancedb.as_ref())
+                    .and_then(|l| l.data_path.clone()),
+                default_data_path(),
+            ),
         );
 
         (
             Self {
                 provider: provider.value,
-                api_key: api_key.value,
+                turbopuffer: TurbopufferStoreConfig {
+                    api_key: api_key.value,
+                },
+                lancedb: LancedbStoreConfig {
+                    data_path: data_path.value,
+                },
             },
             StoreSources {
                 provider: provider.source,
-                api_key: api_key.source,
+                turbopuffer: TurbopufferStoreSources {
+                    api_key: api_key.source,
+                },
+                lancedb: LancedbStoreSources {
+                    data_path: data_path.source,
+                },
             },
         )
     }
@@ -56,12 +117,17 @@ impl StoreConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::FileStoreConfig;
     use crate::config::test_helpers::{remove_envs, set_env};
+    use crate::config::{FileLancedbConfig, FileStoreConfig, FileTurbopufferConfig};
     use serial_test::serial;
 
     fn clear_env() {
-        remove_envs(&["WDPKR_STORE_PROVIDER", "TURBOPUFFER_API_KEY"]);
+        remove_envs(&[
+            "WDPKR_STORE_PROVIDER",
+            "TURBOPUFFER_API_KEY",
+            "WDPKR_STORE_PATH",
+            "XDG_DATA_HOME",
+        ]);
     }
 
     #[test]
@@ -70,7 +136,9 @@ mod tests {
         clear_env();
         let cfg = StoreConfig::from_env(&None);
         assert_eq!(cfg.provider, "turbopuffer");
-        assert_eq!(cfg.api_key, "");
+        assert_eq!(cfg.turbopuffer.api_key, "");
+        assert!(!cfg.lancedb.data_path.is_empty());
+        assert!(cfg.lancedb.data_path.ends_with("wdpkr/lancedb"));
     }
 
     #[test]
@@ -89,7 +157,7 @@ mod tests {
         clear_env();
         set_env("TURBOPUFFER_API_KEY", "test-key-123");
         let cfg = StoreConfig::from_env(&None);
-        assert_eq!(cfg.api_key, "test-key-123");
+        assert_eq!(cfg.turbopuffer.api_key, "test-key-123");
         clear_env();
     }
 
@@ -133,7 +201,8 @@ mod tests {
         clear_env();
         let (_, sources) = StoreConfig::resolve(&None);
         assert_eq!(sources.provider, Source::Default);
-        assert_eq!(sources.api_key, Source::Default);
+        assert_eq!(sources.turbopuffer.api_key, Source::Default);
+        assert_eq!(sources.lancedb.data_path, Source::Default);
     }
 
     #[test]
@@ -157,9 +226,14 @@ mod tests {
         clear_env();
         set_env("WDPKR_STORE_PROVIDER", "qdrant");
         set_env("TURBOPUFFER_API_KEY", "key");
+        set_env("WDPKR_STORE_PATH", "/custom/path");
         let (_, sources) = StoreConfig::resolve(&None);
         assert_eq!(sources.provider, Source::Env("WDPKR_STORE_PROVIDER"));
-        assert_eq!(sources.api_key, Source::Env("TURBOPUFFER_API_KEY"));
+        assert_eq!(
+            sources.turbopuffer.api_key,
+            Source::Env("TURBOPUFFER_API_KEY")
+        );
+        assert_eq!(sources.lancedb.data_path, Source::Env("WDPKR_STORE_PATH"));
         clear_env();
     }
 
@@ -169,7 +243,12 @@ mod tests {
     fn validate_passes_turbopuffer_with_key() {
         let cfg = StoreConfig {
             provider: "turbopuffer".into(),
-            api_key: "key-123".into(),
+            turbopuffer: TurbopufferStoreConfig {
+                api_key: "key-123".into(),
+            },
+            lancedb: LancedbStoreConfig {
+                data_path: String::new(),
+            },
         };
         assert!(cfg.validate().is_ok());
     }
@@ -178,7 +257,12 @@ mod tests {
     fn validate_fails_turbopuffer_without_key() {
         let cfg = StoreConfig {
             provider: "turbopuffer".into(),
-            api_key: String::new(),
+            turbopuffer: TurbopufferStoreConfig {
+                api_key: String::new(),
+            },
+            lancedb: LancedbStoreConfig {
+                data_path: String::new(),
+            },
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("TURBOPUFFER_API_KEY"));
@@ -188,9 +272,111 @@ mod tests {
     fn validate_fails_unknown_provider() {
         let cfg = StoreConfig {
             provider: "qdrant".into(),
-            api_key: "key".into(),
+            turbopuffer: TurbopufferStoreConfig {
+                api_key: "key".into(),
+            },
+            lancedb: LancedbStoreConfig {
+                data_path: String::new(),
+            },
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("unknown store provider"));
+    }
+
+    // ── Backwards compatibility ──────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn legacy_flat_api_key_still_resolves() {
+        clear_env();
+        let file = FileConfig {
+            store: Some(FileStoreConfig {
+                turbopuffer_api_key: Some("legacy-key".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = StoreConfig::from_env(&Some(file));
+        assert_eq!(cfg.turbopuffer.api_key, "legacy-key");
+    }
+
+    #[test]
+    #[serial]
+    fn nested_key_beats_legacy_flat_key() {
+        clear_env();
+        let file = FileConfig {
+            store: Some(FileStoreConfig {
+                turbopuffer_api_key: Some("old-key".into()),
+                turbopuffer: Some(FileTurbopufferConfig {
+                    api_key: Some("new-key".into()),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = StoreConfig::from_env(&Some(file));
+        assert_eq!(cfg.turbopuffer.api_key, "new-key");
+    }
+
+    #[test]
+    #[serial]
+    fn legacy_flat_key_source_is_file() {
+        clear_env();
+        let file = FileConfig {
+            store: Some(FileStoreConfig {
+                turbopuffer_api_key: Some("key".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, sources) = StoreConfig::resolve(&Some(file));
+        assert_eq!(sources.turbopuffer.api_key, Source::File);
+    }
+
+    // ── LanceDB config ──────────────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn lancedb_data_path_defaults() {
+        clear_env();
+        let cfg = StoreConfig::from_env(&None);
+        assert!(cfg.lancedb.data_path.contains("wdpkr/lancedb"));
+    }
+
+    #[test]
+    #[serial]
+    fn lancedb_env_overrides_data_path() {
+        clear_env();
+        set_env("WDPKR_STORE_PATH", "/custom/lance");
+        let cfg = StoreConfig::from_env(&None);
+        assert_eq!(cfg.lancedb.data_path, "/custom/lance");
+        clear_env();
+    }
+
+    #[test]
+    #[serial]
+    fn lancedb_file_value_used() {
+        clear_env();
+        let file = FileConfig {
+            store: Some(FileStoreConfig {
+                lancedb: Some(FileLancedbConfig {
+                    data_path: Some("/my/data".into()),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = StoreConfig::from_env(&Some(file));
+        assert_eq!(cfg.lancedb.data_path, "/my/data");
+    }
+
+    #[test]
+    #[serial]
+    fn lancedb_xdg_data_home_respected() {
+        clear_env();
+        set_env("XDG_DATA_HOME", "/tmp/xdg-data");
+        let cfg = StoreConfig::from_env(&None);
+        assert_eq!(cfg.lancedb.data_path, "/tmp/xdg-data/wdpkr/lancedb");
+        clear_env();
     }
 }

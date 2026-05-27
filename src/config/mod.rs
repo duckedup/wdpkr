@@ -40,7 +40,7 @@ pub(crate) mod test_helpers;
 
 pub use embed::{EmbedConfig, EmbedSources};
 pub use indexer::{IndexerConfig, IndexerSources};
-pub use store::{StoreConfig, StoreSources};
+pub use store::{LancedbStoreConfig, StoreConfig, StoreSources, TurbopufferStoreConfig};
 pub use summarizer::{SummarizerConfig, SummarizerSources};
 pub use tap::{FileTapConfig, TapConfig, TapsSources};
 
@@ -243,6 +243,11 @@ impl ResolvedConfig {
                 source: s.store.provider.clone(),
             },
             ConfigEntry {
+                key: "store.lancedb.data_path",
+                value: c.store.lancedb.data_path.clone(),
+                source: s.store.lancedb.data_path.clone(),
+            },
+            ConfigEntry {
                 key: "embedder.provider",
                 value: c.embed.provider.clone(),
                 source: s.embed.provider.clone(),
@@ -343,8 +348,25 @@ pub struct FileConfig {
 pub struct FileStoreConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Legacy flat key — kept for backwards compat with existing config files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turbopuffer_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turbopuffer: Option<FileTurbopufferConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lancedb: Option<FileLancedbConfig>,
+}
+
+#[derive(Deserialize, Serialize, Default, Debug, Clone)]
+pub struct FileTurbopufferConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Default, Debug, Clone)]
+pub struct FileLancedbConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_path: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
@@ -490,6 +512,20 @@ impl FileConfig {
             "store.turbopuffer_api_key" => {
                 self.store.get_or_insert_default().turbopuffer_api_key = Some(value.into());
             }
+            "store.turbopuffer.api_key" => {
+                self.store
+                    .get_or_insert_default()
+                    .turbopuffer
+                    .get_or_insert_default()
+                    .api_key = Some(value.into());
+            }
+            "store.lancedb.data_path" => {
+                self.store
+                    .get_or_insert_default()
+                    .lancedb
+                    .get_or_insert_default()
+                    .data_path = Some(value.into());
+            }
             "summarizer.provider" => {
                 self.summarizer.get_or_insert_default().provider = Some(value.into());
             }
@@ -543,6 +579,7 @@ mod tests {
     fn clear_wdpkr_env() {
         remove_envs(&[
             "WDPKR_STORE_PROVIDER",
+            "WDPKR_STORE_PATH",
             "WDPKR_EMBED_PROVIDER",
             "WDPKR_EMBED_MODEL",
             "WDPKR_EMBED_BATCH_SIZE",
@@ -559,6 +596,7 @@ mod tests {
             "ANTHROPIC_API_KEY",
             "OLLAMA_HOST",
             "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
         ]);
     }
 
@@ -746,6 +784,7 @@ indexer:
         let keys: Vec<&str> = entries.iter().map(|e| e.key).collect();
         for required in [
             "store.provider",
+            "store.lancedb.data_path",
             "embedder.provider",
             "embedder.model",
             "embedder.batch_size",
