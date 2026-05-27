@@ -4,9 +4,9 @@
 
 store:
   provider: turbopuffer
-  # provider: lancedb
-  # lancedb:
-  #   data_path: ~/.local/share/wdpkr/lancedb
+  # provider: duckdb
+  # duckdb:
+  #   data_path: ~/.local/share/wdpkr/duckdb
 
 embedder:
   provider: voyage

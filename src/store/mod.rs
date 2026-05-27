@@ -8,7 +8,7 @@
 //! 1. Create a module implementing `VectorStore` + `StoreProvider`
 //! 2. Register one line in [`providers()`]
 
-pub mod lancedb;
+pub mod duckdb;
 pub mod turbopuffer;
 
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ pub trait StoreProvider: Send + Sync {
 fn providers() -> Vec<Box<dyn StoreProvider>> {
     vec![
         Box::new(turbopuffer::TurbopufferProvider),
-        Box::new(lancedb::LancedbProvider),
+        Box::new(duckdb::DuckdbProvider),
     ]
 }
 
@@ -416,9 +416,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_provider_lancedb() {
-        let p = resolve_provider("lancedb").unwrap();
-        assert_eq!(p.name(), "lancedb");
+    fn resolve_provider_duckdb() {
+        let p = resolve_provider("duckdb").unwrap();
+        assert_eq!(p.name(), "duckdb");
     }
 
     #[test]
@@ -428,19 +428,19 @@ mod tests {
         let msg = result.err().unwrap().to_string();
         assert!(msg.contains("unknown store provider"));
         assert!(msg.contains("turbopuffer"));
-        assert!(msg.contains("lancedb"));
+        assert!(msg.contains("duckdb"));
     }
 
     // ── Factory ──────────────────────────────────────────────────────
 
     fn test_config(provider: &str, api_key: &str) -> StoreConfig {
-        use crate::config::{LancedbStoreConfig, TurbopufferStoreConfig};
+        use crate::config::{DuckdbStoreConfig, TurbopufferStoreConfig};
         StoreConfig {
             provider: provider.into(),
             turbopuffer: TurbopufferStoreConfig {
                 api_key: api_key.into(),
             },
-            lancedb: LancedbStoreConfig {
+            duckdb: DuckdbStoreConfig {
                 data_path: String::new(),
             },
         }

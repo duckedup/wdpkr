@@ -19,10 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install protobuf compiler
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install Rust toolchain
+- name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -56,10 +53,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install protobuf compiler
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install Miri
+- name: Install Miri
         run: |
           rustup toolchain install nightly --component miri
           rustup override set nightly

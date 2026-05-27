@@ -40,7 +40,7 @@ pub(crate) mod test_helpers;
 
 pub use embed::{EmbedConfig, EmbedSources};
 pub use indexer::{IndexerConfig, IndexerSources};
-pub use store::{LancedbStoreConfig, StoreConfig, StoreSources, TurbopufferStoreConfig};
+pub use store::{DuckdbStoreConfig, StoreConfig, StoreSources, TurbopufferStoreConfig};
 pub use summarizer::{SummarizerConfig, SummarizerSources};
 pub use tap::{FileTapConfig, TapConfig, TapsSources};
 
@@ -243,9 +243,9 @@ impl ResolvedConfig {
                 source: s.store.provider.clone(),
             },
             ConfigEntry {
-                key: "store.lancedb.data_path",
-                value: c.store.lancedb.data_path.clone(),
-                source: s.store.lancedb.data_path.clone(),
+                key: "store.duckdb.data_path",
+                value: c.store.duckdb.data_path.clone(),
+                source: s.store.duckdb.data_path.clone(),
             },
             ConfigEntry {
                 key: "embedder.provider",
@@ -354,7 +354,7 @@ pub struct FileStoreConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turbopuffer: Option<FileTurbopufferConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lancedb: Option<FileLancedbConfig>,
+    pub duckdb: Option<FileDuckdbConfig>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
@@ -364,7 +364,7 @@ pub struct FileTurbopufferConfig {
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
-pub struct FileLancedbConfig {
+pub struct FileDuckdbConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_path: Option<String>,
 }
@@ -519,10 +519,10 @@ impl FileConfig {
                     .get_or_insert_default()
                     .api_key = Some(value.into());
             }
-            "store.lancedb.data_path" => {
+            "store.duckdb.data_path" => {
                 self.store
                     .get_or_insert_default()
-                    .lancedb
+                    .duckdb
                     .get_or_insert_default()
                     .data_path = Some(value.into());
             }
@@ -784,7 +784,7 @@ indexer:
         let keys: Vec<&str> = entries.iter().map(|e| e.key).collect();
         for required in [
             "store.provider",
-            "store.lancedb.data_path",
+            "store.duckdb.data_path",
             "embedder.provider",
             "embedder.model",
             "embedder.batch_size",

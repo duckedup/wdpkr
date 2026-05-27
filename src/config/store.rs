@@ -5,14 +5,14 @@ use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 pub struct StoreConfig {
     pub provider: String,
     pub turbopuffer: TurbopufferStoreConfig,
-    pub lancedb: LancedbStoreConfig,
+    pub duckdb: DuckdbStoreConfig,
 }
 
 pub struct TurbopufferStoreConfig {
     pub api_key: String,
 }
 
-pub struct LancedbStoreConfig {
+pub struct DuckdbStoreConfig {
     pub data_path: String,
 }
 
@@ -28,7 +28,7 @@ impl StoreConfig {
 pub struct StoreSources {
     pub provider: Source,
     pub turbopuffer: TurbopufferStoreSources,
-    pub lancedb: LancedbStoreSources,
+    pub duckdb: DuckdbStoreSources,
 }
 
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ pub struct TurbopufferStoreSources {
 }
 
 #[derive(Debug, Clone)]
-pub struct LancedbStoreSources {
+pub struct DuckdbStoreSources {
     pub data_path: Source,
 }
 
@@ -50,7 +50,7 @@ fn default_data_path() -> String {
         std::path::PathBuf::from(".local/share")
     };
     base.join("wdpkr")
-        .join("lancedb")
+        .join("duckdb")
         .to_string_lossy()
         .into_owned()
 }
@@ -85,8 +85,8 @@ impl StoreConfig {
         let data_path: Resolved<String> = env_or_resolved(
             "WDPKR_STORE_PATH",
             file_or_resolved(
-                f.and_then(|s| s.lancedb.as_ref())
-                    .and_then(|l| l.data_path.clone()),
+                f.and_then(|s| s.duckdb.as_ref())
+                    .and_then(|d| d.data_path.clone()),
                 default_data_path(),
             ),
         );
@@ -97,7 +97,7 @@ impl StoreConfig {
                 turbopuffer: TurbopufferStoreConfig {
                     api_key: api_key.value,
                 },
-                lancedb: LancedbStoreConfig {
+                duckdb: DuckdbStoreConfig {
                     data_path: data_path.value,
                 },
             },
@@ -106,7 +106,7 @@ impl StoreConfig {
                 turbopuffer: TurbopufferStoreSources {
                     api_key: api_key.source,
                 },
-                lancedb: LancedbStoreSources {
+                duckdb: DuckdbStoreSources {
                     data_path: data_path.source,
                 },
             },
@@ -118,7 +118,7 @@ impl StoreConfig {
 mod tests {
     use super::*;
     use crate::config::test_helpers::{remove_envs, set_env};
-    use crate::config::{FileLancedbConfig, FileStoreConfig, FileTurbopufferConfig};
+    use crate::config::{FileDuckdbConfig, FileStoreConfig, FileTurbopufferConfig};
     use serial_test::serial;
 
     fn clear_env() {
@@ -137,8 +137,8 @@ mod tests {
         let cfg = StoreConfig::from_env(&None);
         assert_eq!(cfg.provider, "turbopuffer");
         assert_eq!(cfg.turbopuffer.api_key, "");
-        assert!(!cfg.lancedb.data_path.is_empty());
-        assert!(cfg.lancedb.data_path.ends_with("wdpkr/lancedb"));
+        assert!(!cfg.duckdb.data_path.is_empty());
+        assert!(cfg.duckdb.data_path.ends_with("wdpkr/duckdb"));
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
         let (_, sources) = StoreConfig::resolve(&None);
         assert_eq!(sources.provider, Source::Default);
         assert_eq!(sources.turbopuffer.api_key, Source::Default);
-        assert_eq!(sources.lancedb.data_path, Source::Default);
+        assert_eq!(sources.duckdb.data_path, Source::Default);
     }
 
     #[test]
@@ -233,7 +233,7 @@ mod tests {
             sources.turbopuffer.api_key,
             Source::Env("TURBOPUFFER_API_KEY")
         );
-        assert_eq!(sources.lancedb.data_path, Source::Env("WDPKR_STORE_PATH"));
+        assert_eq!(sources.duckdb.data_path, Source::Env("WDPKR_STORE_PATH"));
         clear_env();
     }
 
@@ -246,7 +246,7 @@ mod tests {
             turbopuffer: TurbopufferStoreConfig {
                 api_key: "key-123".into(),
             },
-            lancedb: LancedbStoreConfig {
+            duckdb: DuckdbStoreConfig {
                 data_path: String::new(),
             },
         };
@@ -260,7 +260,7 @@ mod tests {
             turbopuffer: TurbopufferStoreConfig {
                 api_key: String::new(),
             },
-            lancedb: LancedbStoreConfig {
+            duckdb: DuckdbStoreConfig {
                 data_path: String::new(),
             },
         };
@@ -275,7 +275,7 @@ mod tests {
             turbopuffer: TurbopufferStoreConfig {
                 api_key: "key".into(),
             },
-            lancedb: LancedbStoreConfig {
+            duckdb: DuckdbStoreConfig {
                 data_path: String::new(),
             },
         };
@@ -333,33 +333,33 @@ mod tests {
         assert_eq!(sources.turbopuffer.api_key, Source::File);
     }
 
-    // ── LanceDB config ──────────────────────────────────────────────
+    // ── DuckDB config ───────────────────────────────────────────────
 
     #[test]
     #[serial]
-    fn lancedb_data_path_defaults() {
+    fn duckdb_data_path_defaults() {
         clear_env();
         let cfg = StoreConfig::from_env(&None);
-        assert!(cfg.lancedb.data_path.contains("wdpkr/lancedb"));
+        assert!(cfg.duckdb.data_path.contains("wdpkr/duckdb"));
     }
 
     #[test]
     #[serial]
-    fn lancedb_env_overrides_data_path() {
+    fn duckdb_env_overrides_data_path() {
         clear_env();
-        set_env("WDPKR_STORE_PATH", "/custom/lance");
+        set_env("WDPKR_STORE_PATH", "/custom/duck");
         let cfg = StoreConfig::from_env(&None);
-        assert_eq!(cfg.lancedb.data_path, "/custom/lance");
+        assert_eq!(cfg.duckdb.data_path, "/custom/duck");
         clear_env();
     }
 
     #[test]
     #[serial]
-    fn lancedb_file_value_used() {
+    fn duckdb_file_value_used() {
         clear_env();
         let file = FileConfig {
             store: Some(FileStoreConfig {
-                lancedb: Some(FileLancedbConfig {
+                duckdb: Some(FileDuckdbConfig {
                     data_path: Some("/my/data".into()),
                 }),
                 ..Default::default()
@@ -367,16 +367,16 @@ mod tests {
             ..Default::default()
         };
         let cfg = StoreConfig::from_env(&Some(file));
-        assert_eq!(cfg.lancedb.data_path, "/my/data");
+        assert_eq!(cfg.duckdb.data_path, "/my/data");
     }
 
     #[test]
     #[serial]
-    fn lancedb_xdg_data_home_respected() {
+    fn duckdb_xdg_data_home_respected() {
         clear_env();
         set_env("XDG_DATA_HOME", "/tmp/xdg-data");
         let cfg = StoreConfig::from_env(&None);
-        assert_eq!(cfg.lancedb.data_path, "/tmp/xdg-data/wdpkr/lancedb");
+        assert_eq!(cfg.duckdb.data_path, "/tmp/xdg-data/wdpkr/duckdb");
         clear_env();
     }
 }

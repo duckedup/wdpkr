@@ -39,10 +39,7 @@ tree-sitter-java = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
 globset = "0.4"
-lancedb = "0.29.0"
-arrow-array = "58.3.0"
-arrow-schema = "58.3.0"
-futures = "0.3.32"
+duckdb = { version = "1.10503.1", default-features = false }
 
 [dev-dependencies]
 serial_test = "3"

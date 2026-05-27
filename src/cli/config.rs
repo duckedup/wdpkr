@@ -60,7 +60,7 @@ async fn run_init() -> Result<()> {
     // ── Vector store ──
     let store_provider = prompt_choice(
         "Vector store provider",
-        &["turbopuffer", "lancedb"],
+        &["turbopuffer", "duckdb"],
         "turbopuffer",
     )?;
     let turbopuffer_key = if store_provider == "turbopuffer" {
@@ -68,9 +68,9 @@ async fn run_init() -> Result<()> {
     } else {
         String::new()
     };
-    let lancedb_data_path = if store_provider == "lancedb" {
+    let duckdb_data_path = if store_provider == "duckdb" {
         let path =
-            super::prompt::prompt_freetext("LanceDB data path (leave empty for default)", "")?;
+            super::prompt::prompt_freetext("DuckDB data path (leave empty for default)", "")?;
         non_empty(path)
     } else {
         None
@@ -124,8 +124,8 @@ async fn run_init() -> Result<()> {
             turbopuffer_api_key: None,
             turbopuffer: non_empty(turbopuffer_key)
                 .map(|k| crate::config::FileTurbopufferConfig { api_key: Some(k) }),
-            lancedb: lancedb_data_path
-                .map(|p| crate::config::FileLancedbConfig { data_path: Some(p) }),
+            duckdb: duckdb_data_path
+                .map(|p| crate::config::FileDuckdbConfig { data_path: Some(p) }),
         }),
         embedder: Some(crate::config::FileEmbedConfig {
             provider: Some(embed_provider),

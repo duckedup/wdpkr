@@ -684,7 +684,7 @@ fn backoff(attempt: usize) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{LancedbStoreConfig, TurbopufferStoreConfig};
+    use crate::config::{DuckdbStoreConfig, TurbopufferStoreConfig};
 
     fn test_config(api_key: &str) -> StoreConfig {
         StoreConfig {
@@ -692,7 +692,7 @@ mod tests {
             turbopuffer: TurbopufferStoreConfig {
                 api_key: api_key.into(),
             },
-            lancedb: LancedbStoreConfig {
+            duckdb: DuckdbStoreConfig {
                 data_path: String::new(),
             },
         }
