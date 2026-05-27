@@ -15,6 +15,7 @@ pub struct DeleteArgs {
 
 pub async fn run(args: DeleteArgs) -> Result<()> {
     let config = Config::new()?;
+    config.store.validate()?;
     let namespace = resolve_namespace(&config)?;
     let embedder = build_embedder(&config.embed).await?;
     let store = build_store(&config.store, embedder.dimension())?;

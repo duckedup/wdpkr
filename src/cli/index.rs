@@ -60,6 +60,7 @@ pub async fn run(args: IndexArgs) -> Result<()> {
         return run_skip_summaries(&config).await;
     }
 
+    config.store.validate()?;
     config.embed.validate()?;
     config.summarizer.validate()?;
 
