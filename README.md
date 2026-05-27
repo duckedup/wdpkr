@@ -75,6 +75,10 @@ cargo install wdpkr
 Or from source:
 
 ```bash
+# protobuf compiler required (used by LanceDB at build time)
+brew install protobuf   # macOS
+# apt install protobuf-compiler  # Debian/Ubuntu
+
 git clone https://github.com/duckedup/wdpkr.git
 cd wdpkr
 cargo install --path .
