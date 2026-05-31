@@ -1,0 +1,76 @@
+---
+title: wdpkr
+description: Semantic code search for AI agents. Taps through your codebase to find exactly where things live.
+template: splash
+hero:
+  tagline: Semantic code search for AI agents. Taps through your codebase to find exactly where things live — "where does the commission system live?" rather than "find the string CommissionService."
+  image:
+    dark: ../../assets/woodpecker-snow.svg
+    light: ../../assets/woodpecker-ink.svg
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/duckedup/wdpkr
+      icon: external
+      variant: minimal
+---
+
+import { Code } from '@astrojs/starlight/components';
+
+<Code code={`wdpkr search "release commission payments to individual payees"`} lang="bash" />
+
+<p class="lede not-content">
+  <strong>wdpkr is not a replacement for grep/ripgrep.</strong> It's the
+  conceptual layer on top. The agent reads the actual files for ground truth —
+  wdpkr's job is to <strong>point and describe</strong>, not to ship source into
+  the context window.
+</p>
+
+<p class="section-kicker not-content">Why it works</p>
+
+<div class="feature-grid not-content">
+  <article class="feature">
+    <span class="num">01</span>
+    <h3>Embed summaries, not code</h3>
+    <p>Off-the-shelf embedders are mediocre on conceptual queries against raw code. LLM-generated summaries close that gap.</p>
+  </article>
+  <article class="feature">
+    <span class="num">02</span>
+    <h3>AST-driven chunking</h3>
+    <p>Tree-sitter parses files into meaningful symbols — functions, types, traits — across 8 languages, not arbitrary line splits.</p>
+  </article>
+  <article class="feature">
+    <span class="num">03</span>
+    <h3>Pluggable backends</h3>
+    <p>Traits for VectorStore, Embedder, Summarizer, and Chunker. Swap providers without touching the pipeline.</p>
+  </article>
+  <article class="feature">
+    <span class="num">04</span>
+    <h3>CLI, not MCP</h3>
+    <p>Any agent that can shell out can use it. JSON to stdout, errors to stderr.</p>
+  </article>
+</div>
+
+<p class="section-kicker not-content">Where to next</p>
+
+<div class="next-grid not-content">
+  <a class="next-card" href="/getting-started/">
+    <span class="next-title">Getting started</span>
+    <p>Install wdpkr, configure providers, index a repo, run your first search.</p>
+  </a>
+  <a class="next-card" href="/guides/how-it-works/">
+    <span class="next-title">How it works</span>
+    <p>The indexing and search pipelines, end to end.</p>
+  </a>
+  <a class="next-card" href="/guides/configuration/">
+    <span class="next-title">Configuration</span>
+    <p>The four-layer resolution model and every knob you can turn.</p>
+  </a>
+  <a class="next-card" href="/reference/commands/">
+    <span class="next-title">CLI reference</span>
+    <p>Every command and flag, with examples.</p>
+  </a>
+</div>
