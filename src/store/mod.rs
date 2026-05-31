@@ -8,6 +8,8 @@
 //! 1. Create a module implementing `VectorStore` + `StoreProvider`
 //! 2. Register one line in [`providers()`]
 
+#[cfg(feature = "duckdb")]
+pub mod duckdb;
 pub mod turbopuffer;
 
 use std::collections::HashMap;
@@ -29,7 +31,12 @@ pub trait StoreProvider: Send + Sync {
 // ── Provider registry ────────────────────────────────────────────────────
 
 fn providers() -> Vec<Box<dyn StoreProvider>> {
-    vec![Box::new(turbopuffer::TurbopufferProvider)]
+    #[allow(unused_mut)]
+    let mut providers: Vec<Box<dyn StoreProvider>> =
+        vec![Box::new(turbopuffer::TurbopufferProvider)];
+    #[cfg(feature = "duckdb")]
+    providers.push(Box::new(duckdb::DuckdbProvider));
+    providers
 }
 
 pub fn resolve_provider(name: &str) -> Result<Box<dyn StoreProvider>> {
@@ -422,21 +429,27 @@ mod tests {
 
     // ── Factory ──────────────────────────────────────────────────────
 
+    fn store_config(provider: &str) -> StoreConfig {
+        StoreConfig {
+            provider: provider.into(),
+            turbopuffer: crate::config::TurbopufferConfig {
+                api_key: "key".into(),
+            },
+            duckdb: crate::config::DuckdbConfig {
+                path: ":memory:".into(),
+            },
+        }
+    }
+
     #[test]
     fn build_store_turbopuffer() {
-        let config = StoreConfig {
-            provider: "turbopuffer".into(),
-            api_key: "key".into(),
-        };
+        let config = store_config("turbopuffer");
         assert!(build_store(&config, 1024).is_ok());
     }
 
     #[test]
     fn build_store_unknown_provider() {
-        let config = StoreConfig {
-            provider: "qdrant".into(),
-            api_key: "key".into(),
-        };
+        let config = store_config("qdrant");
         let result = build_store(&config, 1024);
         assert!(result.is_err());
         assert!(

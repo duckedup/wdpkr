@@ -40,7 +40,10 @@ pub(crate) mod test_helpers;
 
 pub use embed::{EmbedConfig, EmbedSources};
 pub use indexer::{IndexerConfig, IndexerSources};
-pub use store::{StoreConfig, StoreSources};
+pub use store::{
+    DuckdbConfig, DuckdbSources, StoreConfig, StoreSources, TurbopufferConfig, TurbopufferSources,
+    default_duckdb_path,
+};
 pub use summarizer::{SummarizerConfig, SummarizerSources};
 pub use tap::{FileTapConfig, TapConfig, TapsSources};
 
@@ -243,6 +246,11 @@ impl ResolvedConfig {
                 source: s.store.provider.clone(),
             },
             ConfigEntry {
+                key: "store.duckdb.path",
+                value: c.store.duckdb.path.clone(),
+                source: s.store.duckdb.path.clone(),
+            },
+            ConfigEntry {
                 key: "embedder.provider",
                 value: c.embed.provider.clone(),
                 source: s.embed.provider.clone(),
@@ -343,8 +351,29 @@ pub struct FileConfig {
 pub struct FileStoreConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Turbopuffer backend settings (`store.turbopuffer.*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turbopuffer: Option<FileTurbopufferConfig>,
+    /// DuckDB backend settings (`store.duckdb.*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duckdb: Option<FileDuckdbConfig>,
+    /// Deprecated flat alias for `store.turbopuffer.api_key`. Still read for
+    /// backwards compatibility; prefer the nested form. Never written by
+    /// `config set`/`init`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turbopuffer_api_key: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Default, Debug, Clone)]
+pub struct FileTurbopufferConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Default, Debug, Clone)]
+pub struct FileDuckdbConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
@@ -487,8 +516,28 @@ impl FileConfig {
             "embedder.openai_api_key" => {
                 self.embedder.get_or_insert_default().openai_api_key = Some(value.into());
             }
+            "store.turbopuffer.api_key" => {
+                self.store
+                    .get_or_insert_default()
+                    .turbopuffer
+                    .get_or_insert_default()
+                    .api_key = Some(value.into());
+            }
+            // Deprecated flat alias — write the nested field so the file stays
+            // in the canonical shape.
             "store.turbopuffer_api_key" => {
-                self.store.get_or_insert_default().turbopuffer_api_key = Some(value.into());
+                self.store
+                    .get_or_insert_default()
+                    .turbopuffer
+                    .get_or_insert_default()
+                    .api_key = Some(value.into());
+            }
+            "store.duckdb.path" => {
+                self.store
+                    .get_or_insert_default()
+                    .duckdb
+                    .get_or_insert_default()
+                    .path = Some(value.into());
             }
             "summarizer.provider" => {
                 self.summarizer.get_or_insert_default().provider = Some(value.into());
@@ -833,6 +882,36 @@ indexer:
         let mut file = FileConfig::default();
         let err = file.set("indexer.concurrency", "not-a-number").unwrap_err();
         assert!(err.to_string().contains("indexer.concurrency"));
+    }
+
+    #[test]
+    fn set_nested_store_keys() {
+        let mut file = FileConfig::default();
+        file.set("store.duckdb.path", "/tmp/db.duckdb").unwrap();
+        file.set("store.turbopuffer.api_key", "tp-key").unwrap();
+        let store = file.store.as_ref().unwrap();
+        assert_eq!(
+            store.duckdb.as_ref().unwrap().path.as_deref(),
+            Some("/tmp/db.duckdb")
+        );
+        assert_eq!(
+            store.turbopuffer.as_ref().unwrap().api_key.as_deref(),
+            Some("tp-key")
+        );
+    }
+
+    #[test]
+    fn set_deprecated_flat_key_writes_nested() {
+        // The deprecated `store.turbopuffer_api_key` alias writes the nested
+        // field so the file lands in the canonical shape.
+        let mut file = FileConfig::default();
+        file.set("store.turbopuffer_api_key", "legacy-key").unwrap();
+        let store = file.store.as_ref().unwrap();
+        assert_eq!(
+            store.turbopuffer.as_ref().unwrap().api_key.as_deref(),
+            Some("legacy-key")
+        );
+        assert!(store.turbopuffer_api_key.is_none());
     }
 
     #[test]
