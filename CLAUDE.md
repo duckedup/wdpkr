@@ -74,17 +74,22 @@ Rust 1.95+ required (pinned via `rust-toolchain.toml`). Edition 2024.
 - Calls tree-sitter (`Parser::new()`, `TreeSitterChunker`) — C library FFI
 - Spawns processes (`Command::new()`) — requires `fork()` syscall
 - Creates reqwest `Client` directly (not via mocks) — system TLS FFI
+- Touches the DuckDB store (`DuckdbStore`) — bundled C library FFI
 
 **Do NOT ignore** tests that use mock implementations (`MockEmbedder`, `MockVectorStore`, `MockSummarizer`) — these are pure Rust and should run under Miri.
 
-Miri runs in CI as a separate job. If nightly breaks Miri temporarily, the CI job will fail but won't block the main `check` job.
+Miri runs `cargo miri test --no-default-features`: the DuckDB backend is behind a
+default-on `duckdb` cargo feature and compiles a bundled C++ library that Miri can
+neither execute nor usefully compile. Disabling the feature keeps Miri focused on
+pure-Rust code. Miri runs in CI as a separate job. If nightly breaks Miri temporarily,
+the CI job will fail but won't block the main `check` job.
 
 ## Architecture Overview
 
 wdpkr is a CLI tool that maintains a vector-search index of LLM-generated code summaries. Two commands:
 
-- `wdpkr index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to Turbopuffer
-- `wdpkr search "<query>"` — embeds query, searches Turbopuffer, returns tiered file+symbol JSON
+- `wdpkr index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to the configured store (Turbopuffer or local DuckDB)
+- `wdpkr search "<query>"` — embeds query, searches the configured store, returns tiered file+symbol JSON
 
 ```
 src/
@@ -93,13 +98,13 @@ src/
 ├── chunk/        # tree-sitter AST chunking (8 languages)
 ├── summarize/    # Anthropic adapter + prompt templates + big-file rollup
 ├── embed/        # Voyage / Ollama / OpenAI adapters
-├── store/        # VectorStore trait + Turbopuffer adapter
+├── store/        # VectorStore trait + Turbopuffer + DuckDB (local) adapters
 ├── search/       # Search orchestration + JSON/pretty output
 ├── indexer/      # Full pipeline: git diff → walk → chunk → summarize → embed → upsert
 └── testing/      # Mocks (store, embedder, summarizer) + fixtures
 ```
 
-All external API adapters share the same pattern: reqwest HTTP client, bounded exponential-backoff retry on 429/5xx, configurable base URL for testing.
+All external API adapters share the same pattern: reqwest HTTP client, bounded exponential-backoff retry on 429/5xx, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
 
 ## Conventions & Patterns
 

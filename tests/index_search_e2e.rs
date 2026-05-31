@@ -574,6 +574,70 @@ async fn json_output_is_valid_after_full_pipeline() {
     cleanup(&dir);
 }
 
+// ── Real DuckDB backend (no mock store) ───────────────────────────────────
+// Proves the full offline pipeline against a real, file-backed DuckDB store:
+// index with one connection, drop it, reopen the same file for search.
+
+#[cfg(feature = "duckdb")]
+#[cfg_attr(miri, ignore)]
+#[tokio::test]
+async fn full_pipeline_against_real_duckdb() {
+    use wdpkr::store::duckdb::DuckdbStore;
+
+    let dir = create_fixture_repo("duckdb-backend");
+    let db_path = dir.join("wdpkr.duckdb");
+    let db_path_str = db_path.to_str().unwrap().to_string();
+    let ns = Namespace::from("test-duckdb");
+
+    // ── Index ──
+    let index_store = DuckdbStore::open(&db_path_str, 8).unwrap();
+    let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
+    let index = IndexRun::new(
+        taps,
+        Arc::new(MockSummarizer::new()),
+        Arc::new(MockEmbedder::new(8)),
+        Arc::new(index_store),
+        ns.clone(),
+        1,
+    );
+    let report = index.run(true).await.unwrap();
+    assert!(report.vectors_upserted > 0, "should upsert into DuckDB");
+    assert_eq!(report.files_failed, 0);
+
+    // Drop the index store so its file lock is released before reopening.
+    drop(index);
+    assert!(db_path.exists(), "DuckDB file should be persisted to disk");
+
+    // ── Search (fresh connection to the same file) ──
+    let search_store = DuckdbStore::open(&db_path_str, 8).unwrap();
+    let search = SearchRun::new(
+        Box::new(MockEmbedder::new(8)),
+        Box::new(search_store),
+        ns.clone(),
+    );
+    let result = search
+        .run(&SearchParams {
+            query: "release a payment".into(),
+            top_k: 5,
+            symbols_per_file: 3,
+            no_symbols: false,
+            scope: vec![],
+            filters: vec![],
+        })
+        .await
+        .unwrap();
+
+    let json_str = wdpkr::search::output::render_json(&result, false).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert!(json["results"].is_array());
+    assert!(
+        !json["results"].as_array().unwrap().is_empty(),
+        "search over real DuckDB should return results"
+    );
+
+    cleanup(&dir);
+}
+
 // ── Arc wrapper for shared mock store ─────────────────────────────────────
 // IndexRun and SearchRun take `Box<dyn VectorStore>` (owned). To share
 // a single MockVectorStore between index and search, we wrap it in Arc

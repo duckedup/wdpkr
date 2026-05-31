@@ -4,6 +4,11 @@
 
 store:
   provider: turbopuffer
+  # Provider-specific settings live in nested blocks:
+  # turbopuffer:
+  #   api_key: ...                # prefer the TURBOPUFFER_API_KEY env var
+  # duckdb:                        # local, file-backed store (provider: duckdb)
+  #   path: ~/.local/share/wdpkr/wdpkr.duckdb   # or WDPKR_DUCKDB_PATH env var
 
 embedder:
   provider: voyage

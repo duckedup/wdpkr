@@ -35,9 +35,11 @@ test:
 test-mod MOD:
     cargo test --all-features {{ MOD }}
 
-# Run Miri to check for undefined behavior (requires nightly)
+# Run Miri to check for undefined behavior (requires nightly).
+# --no-default-features drops the DuckDB backend (bundled C library FFI that
+# Miri cannot execute).
 miri:
-    MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks" cargo +nightly miri test
+    MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks" cargo +nightly miri test --no-default-features
 
 # Pre-commit / pre-PR checks: format clean, no clippy warnings, tests green
 ci: fmt-check lint test

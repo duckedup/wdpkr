@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use owo_colors::{OwoColorize, Stream, Style};
 
-use super::prompt::{non_empty, prompt_choice, prompt_secret};
+use super::prompt::{non_empty, prompt_choice, prompt_freetext, prompt_secret};
 use crate::config::{FileConfig, ResolvedConfig, Source};
 
 #[derive(Args, Debug)]
@@ -58,8 +58,24 @@ async fn run_init() -> Result<()> {
     println!("wdpkr config init — setting up ~/.config/wdpkr/config.yaml\n");
 
     // ── Vector store ──
-    let store_provider = prompt_choice("Vector store provider", &["turbopuffer"], "turbopuffer")?;
-    let turbopuffer_key = prompt_secret("Turbopuffer API key (TURBOPUFFER_API_KEY)")?;
+    let store_provider = prompt_choice(
+        "Vector store provider",
+        &["turbopuffer", "duckdb"],
+        "turbopuffer",
+    )?;
+    let turbopuffer_key = if store_provider == "turbopuffer" {
+        prompt_secret("Turbopuffer API key (TURBOPUFFER_API_KEY)")?
+    } else {
+        String::new()
+    };
+    let duckdb_path = if store_provider == "duckdb" {
+        prompt_freetext(
+            "DuckDB database path",
+            &crate::config::default_duckdb_path(),
+        )?
+    } else {
+        String::new()
+    };
 
     // ── Embedder ──
     let embed_provider = prompt_choice(
@@ -106,7 +122,14 @@ async fn run_init() -> Result<()> {
     let file_config = FileConfig {
         store: Some(crate::config::FileStoreConfig {
             provider: Some(store_provider),
-            turbopuffer_api_key: non_empty(turbopuffer_key),
+            turbopuffer: non_empty(turbopuffer_key).map(|api_key| {
+                crate::config::FileTurbopufferConfig {
+                    api_key: Some(api_key),
+                }
+            }),
+            duckdb: non_empty(duckdb_path)
+                .map(|path| crate::config::FileDuckdbConfig { path: Some(path) }),
+            ..Default::default()
         }),
         embedder: Some(crate::config::FileEmbedConfig {
             provider: Some(embed_provider),
@@ -263,7 +286,10 @@ mod tests {
         let file_config = FileConfig {
             store: Some(crate::config::FileStoreConfig {
                 provider: Some("turbopuffer".into()),
-                turbopuffer_api_key: Some("tp-key-123".into()),
+                turbopuffer: Some(crate::config::FileTurbopufferConfig {
+                    api_key: Some("tp-key-123".into()),
+                }),
+                ..Default::default()
             }),
             embedder: Some(crate::config::FileEmbedConfig {
                 provider: Some("voyage".into()),
@@ -298,7 +324,10 @@ mod tests {
         let file_config = FileConfig {
             store: Some(crate::config::FileStoreConfig {
                 provider: Some("turbopuffer".into()),
-                turbopuffer_api_key: Some("file-tp-key".into()),
+                turbopuffer: Some(crate::config::FileTurbopufferConfig {
+                    api_key: Some("file-tp-key".into()),
+                }),
+                ..Default::default()
             }),
             summarizer: Some(crate::config::FileSummarizerConfig {
                 anthropic_api_key: Some("file-ant-key".into()),
@@ -309,7 +338,7 @@ mod tests {
         file_config.save().unwrap();
 
         let resolved = ResolvedConfig::new().unwrap();
-        assert_eq!(resolved.config.store.api_key, "file-tp-key");
+        assert_eq!(resolved.config.store.turbopuffer.api_key, "file-tp-key");
         assert_eq!(resolved.config.summarizer.api_key, "file-ant-key");
 
         teardown(&tmp);
@@ -331,9 +360,9 @@ mod tests {
 
         set_env("TURBOPUFFER_API_KEY", "env-key");
         let resolved = ResolvedConfig::new().unwrap();
-        assert_eq!(resolved.config.store.api_key, "env-key");
+        assert_eq!(resolved.config.store.turbopuffer.api_key, "env-key");
         assert_eq!(
-            resolved.sources.store.api_key,
+            resolved.sources.store.turbopuffer.api_key,
             crate::config::Source::Env("TURBOPUFFER_API_KEY")
         );
 

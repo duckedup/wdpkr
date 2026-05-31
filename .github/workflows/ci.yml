@@ -62,4 +62,6 @@ jobs:
       - name: Test with Miri
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks"
-        run: cargo miri test
+        # --no-default-features drops the DuckDB backend: Miri interprets MIR
+        # and cannot execute (or usefully compile) its bundled C library FFI.
+        run: cargo miri test --no-default-features
