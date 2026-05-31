@@ -80,6 +80,24 @@ cd wdpkr
 cargo install --path .
 ```
 
+### Development prerequisites
+
+DuckDB is required to build wdpkr (linked at compile time, used at runtime only when `store.provider=duckdb`):
+
+```bash
+# macOS
+brew install duckdb
+export DUCKDB_LIB_DIR=/opt/homebrew/lib
+export DUCKDB_INCLUDE_DIR=/opt/homebrew/include
+
+# Debian/Ubuntu
+wget -q https://github.com/duckdb/duckdb/releases/download/v1.3.0/libduckdb-linux-amd64.zip
+unzip libduckdb-linux-amd64.zip -d /tmp/duckdb
+sudo cp /tmp/duckdb/libduckdb.so /usr/local/lib/
+sudo cp /tmp/duckdb/duckdb.h /usr/local/include/
+sudo ldconfig
+```
+
 ## Quick start
 
 ```bash
