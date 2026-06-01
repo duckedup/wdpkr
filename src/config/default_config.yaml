@@ -14,6 +14,7 @@ embedder:
   provider: voyage
   model: voyage-code-3
   batch_size: 64
+  embed_mode: summary       # 'summary' = embed LLM summaries; 'docstring' = embed code docs + signatures (no LLM, zero Anthropic cost)
   # ollama_host: http://localhost:11434
 
 summarizer:

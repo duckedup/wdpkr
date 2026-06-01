@@ -98,6 +98,12 @@ async fn run_init() -> Result<()> {
         _ => "voyage-code-3".into(),
     };
 
+    let embed_mode = prompt_choice(
+        "Embedding mode (summary = LLM summaries; docstring = embed code docs + signatures, no LLM)",
+        &["summary", "docstring"],
+        "summary",
+    )?;
+
     let voyage_key = if embed_provider == "voyage" {
         prompt_secret("Voyage API key (VOYAGE_API_KEY)")?
     } else {
@@ -134,6 +140,7 @@ async fn run_init() -> Result<()> {
         embedder: Some(crate::config::FileEmbedConfig {
             provider: Some(embed_provider),
             model: Some(embed_model),
+            embed_mode: Some(embed_mode),
             voyage_api_key: non_empty(voyage_key),
             openai_api_key: non_empty(openai_key),
             ..Default::default()
@@ -294,6 +301,7 @@ mod tests {
             embedder: Some(crate::config::FileEmbedConfig {
                 provider: Some("voyage".into()),
                 model: Some("voyage-code-3".into()),
+                embed_mode: Some("docstring".into()),
                 voyage_api_key: Some("voy-key".into()),
                 ..Default::default()
             }),
@@ -311,6 +319,7 @@ mod tests {
         assert!(content.contains("turbopuffer"), "store provider: {content}");
         assert!(content.contains("tp-key-123"), "store key: {content}");
         assert!(content.contains("voyage-code-3"), "embed model: {content}");
+        assert!(content.contains("docstring"), "embed mode: {content}");
         assert!(content.contains("voy-key"), "voyage key: {content}");
         assert!(content.contains("ant-key"), "anthropic key: {content}");
 
