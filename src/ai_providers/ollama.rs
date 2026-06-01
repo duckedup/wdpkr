@@ -3,14 +3,13 @@
 //! Dimension is detected via a probe embed on initialization since Ollama
 //! serves user-installed models whose dimensions aren't known statically.
 
-use std::time::Duration;
-
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::Embedder;
 use crate::config::EmbedConfig;
+use crate::embed::Embedder;
+use crate::http::{self, RetryPolicy};
 
 const MAX_RETRIES: usize = 3;
 
@@ -56,43 +55,24 @@ impl OllamaEmbedder {
             "model": model,
             "input": text,
         });
+        let url = format!("{host}/api/embed");
 
-        for attempt in 0..=MAX_RETRIES {
-            let resp = client
-                .post(format!("{host}/api/embed"))
-                .json(&body)
-                .send()
-                .await;
+        let policy = RetryPolicy::server_errors(MAX_RETRIES, 500);
+        let resp =
+            http::send_with_retry(&policy, "Ollama API", || client.post(&url).json(&body)).await?;
 
-            let resp = match resp {
-                Ok(r) => r,
-                Err(_) if attempt < MAX_RETRIES => {
-                    tokio::time::sleep(backoff(attempt)).await;
-                    continue;
-                }
-                Err(e) => return Err(e).context("Ollama API request failed"),
-            };
-
-            let status = resp.status();
-            if status.is_success() {
-                let api_resp: EmbedResponse =
-                    resp.json().await.context("parsing Ollama response")?;
-                return api_resp
-                    .embeddings
-                    .into_iter()
-                    .next()
-                    .context("Ollama returned empty embeddings");
-            }
-
-            if status.as_u16() >= 500 && attempt < MAX_RETRIES {
-                tokio::time::sleep(backoff(attempt)).await;
-                continue;
-            }
-
-            let error_body = resp.text().await.unwrap_or_default();
-            bail!("Ollama API error ({status}): {error_body}");
+        let status = resp.status();
+        if status.is_success() {
+            let api_resp: EmbedResponse = resp.json().await.context("parsing Ollama response")?;
+            return api_resp
+                .embeddings
+                .into_iter()
+                .next()
+                .context("Ollama returned empty embeddings");
         }
-        bail!("Ollama API: max retries exceeded")
+
+        let error_body = resp.text().await.unwrap_or_default();
+        bail!("Ollama API error ({status}): {error_body}");
     }
 }
 
@@ -126,10 +106,6 @@ impl Embedder for OllamaEmbedder {
     }
 }
 
-fn backoff(attempt: usize) -> Duration {
-    Duration::from_millis(500 * 2u64.pow(attempt as u32))
-}
-
 #[derive(Deserialize)]
 struct EmbedResponse {
     embeddings: Vec<Vec<f32>>,
@@ -152,12 +128,5 @@ mod tests {
         let json = r#"{"model":"nomic-embed-text","embeddings":[[0.1,0.2],[0.3,0.4],[0.5,0.6]]}"#;
         let resp: EmbedResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.embeddings.len(), 3);
-    }
-
-    #[test]
-    fn backoff_timing() {
-        assert_eq!(backoff(0), Duration::from_millis(500));
-        assert_eq!(backoff(1), Duration::from_secs(1));
-        assert_eq!(backoff(2), Duration::from_secs(2));
     }
 }

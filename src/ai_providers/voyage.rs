@@ -1,13 +1,12 @@
 //! Voyage AI embedding adapter (`voyage-code-3` default).
 
-use std::time::Duration;
-
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::Embedder;
 use crate::config::EmbedConfig;
+use crate::embed::Embedder;
+use crate::http::{self, RetryPolicy};
 
 const MAX_BATCH: usize = 128;
 const MAX_RETRIES: usize = 3;
@@ -41,43 +40,23 @@ impl VoyageEmbedder {
             "input_type": "document",
         });
 
-        for attempt in 0..=MAX_RETRIES {
-            let resp = self
-                .client
+        let policy = RetryPolicy::standard(MAX_RETRIES, 1000);
+        let resp = http::send_with_retry(&policy, "Voyage API", || {
+            self.client
                 .post("https://api.voyageai.com/v1/embeddings")
                 .bearer_auth(&self.api_key)
                 .json(&body)
-                .send()
-                .await;
+        })
+        .await?;
 
-            let resp = match resp {
-                Ok(r) => r,
-                Err(e) if attempt < MAX_RETRIES => {
-                    tokio::time::sleep(backoff(attempt)).await;
-                    eprintln!(
-                        "warning: Voyage API request failed (attempt {}): {e}",
-                        attempt + 1
-                    );
-                    continue;
-                }
-                Err(e) => return Err(e).context("Voyage API request failed"),
-            };
-
-            let status = resp.status();
-            if status.is_success() {
-                let api_resp: ApiResponse = resp.json().await.context("parsing Voyage response")?;
-                return Ok(api_resp.data.into_iter().map(|d| d.embedding).collect());
-            }
-
-            if is_retryable(status.as_u16()) && attempt < MAX_RETRIES {
-                tokio::time::sleep(backoff(attempt)).await;
-                continue;
-            }
-
-            let error_body = resp.text().await.unwrap_or_default();
-            bail!("Voyage API error ({status}): {error_body}");
+        let status = resp.status();
+        if status.is_success() {
+            let api_resp: ApiResponse = resp.json().await.context("parsing Voyage response")?;
+            return Ok(api_resp.data.into_iter().map(|d| d.embedding).collect());
         }
-        bail!("Voyage API: max retries exceeded")
+
+        let error_body = resp.text().await.unwrap_or_default();
+        bail!("Voyage API error ({status}): {error_body}");
     }
 }
 
@@ -123,14 +102,6 @@ fn dimension_for_model(model: &str) -> usize {
     }
 }
 
-fn backoff(attempt: usize) -> Duration {
-    Duration::from_millis(1000 * 2u64.pow(attempt as u32))
-}
-
-fn is_retryable(status: u16) -> bool {
-    matches!(status, 429 | 500 | 502 | 503 | 529)
-}
-
 #[derive(Deserialize)]
 struct ApiResponse {
     data: Vec<EmbeddingData>,
@@ -165,21 +136,6 @@ mod tests {
         let json = r#"{"data":[{"embedding":[0.1,0.2],"index":0},{"embedding":[0.3,0.4],"index":1}],"model":"voyage-code-3","usage":{"total_tokens":20}}"#;
         let resp: ApiResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.data.len(), 2);
-    }
-
-    #[test]
-    fn retryable_codes() {
-        assert!(is_retryable(429));
-        assert!(is_retryable(500));
-        assert!(!is_retryable(400));
-        assert!(!is_retryable(401));
-    }
-
-    #[test]
-    fn backoff_is_exponential() {
-        assert_eq!(backoff(0), Duration::from_secs(1));
-        assert_eq!(backoff(1), Duration::from_secs(2));
-        assert_eq!(backoff(2), Duration::from_secs(4));
     }
 
     #[test]

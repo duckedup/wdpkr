@@ -95,15 +95,17 @@ src/
 ├── cli/          # Clap parsing + subcommand dispatch
 ├── config/       # 4-layer resolution: defaults → file → env → CLI flags
 ├── chunk/        # tree-sitter AST chunking (8 languages)
-├── summarize/    # Anthropic adapter + prompt templates + big-file rollup
-├── embed/        # Voyage / Ollama / OpenAI adapters
+├── ai_providers/ # All model-backend adapters: voyage/openai/ollama (embed) + anthropic (summarize) + capability registry
+├── http/         # Shared reqwest retry: RetryPolicy + send_with_retry (used by ai_providers + store)
+├── summarize/    # Summarizer trait + prompt templates + big-file rollup + build_summarizer factory
+├── embed/        # Embedder trait + build_embedder factory
 ├── store/        # VectorStore trait + Turbopuffer + DuckDB (local) adapters
 ├── search/       # Search orchestration + JSON/pretty output
 ├── indexer/      # Full pipeline: git diff → walk → chunk → summarize → embed → upsert
 └── testing/      # Mocks (store, embedder, summarizer) + fixtures
 ```
 
-All external API adapters share the same pattern: reqwest HTTP client, bounded exponential-backoff retry on 429/5xx, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
+Provider adapters live in one place (`ai_providers/`); the `embed` and `summarize` modules own their traits and a factory that consults `ai_providers::PROVIDERS` (a capability registry — `Embed`/`Summarize`) before dispatching. Voyage is embed-only by design. All HTTP adapters (AI providers and the Turbopuffer store) share `http::send_with_retry`: a reqwest client, bounded exponential-backoff retry on transient send errors and retryable statuses, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
 
 ## Conventions & Patterns
 

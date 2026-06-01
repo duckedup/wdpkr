@@ -10,7 +10,7 @@ use crate::embed::build_embedder;
 use crate::indexer::cost::{self, ProviderRates};
 use crate::indexer::{IndexRun, resolve_namespace};
 use crate::store::build_store;
-use crate::summarize::anthropic::build_summarizer;
+use crate::summarize::build_summarizer;
 use crate::tap::build_taps;
 
 #[derive(Args, Debug)]
