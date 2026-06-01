@@ -12,9 +12,39 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental artifacts are large and single-run-only — they just bloat the
+  # cache. CI builds clean each run, so disable incremental compilation.
+  CARGO_INCREMENTAL: "0"
+
 jobs:
-  check:
+  # Formatting is a no-compile check — keep it as its own fast job.
+  fmt:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # clippy and test are separate compiles (check-mode vs build-mode artifacts),
+  # so run them as parallel jobs instead of one sequential job. Each keeps its
+  # own cache slot.
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: clippy
+            components: clippy
+            command: cargo clippy --all-targets --all-features -- -D warnings
+          - name: test
+            components: ""
+            command: cargo test --all-features
     steps:
       # Reclaim ~30 GB by dropping preinstalled toolchains we don't use, so the
       # DuckDB bundled C++ build + cache restore have headroom. Inlined rather
@@ -26,41 +56,66 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: ${{ matrix.components }}
 
-      # Swatinem/rust-cache prunes intermediate + workspace artifacts before
-      # saving, so the cache stays bounded. The previous raw `target/` cache
-      # grew to ~4.6 GB (DuckDB's bundled C++ build) and ran the runner out of
-      # disk on restore (`tar: Wrote only N of M bytes`).
-      - name: Cache cargo registry + build
-        uses: Swatinem/rust-cache@v2
+      # First-party cache with restore-keys. A Cargo.lock change — including a
+      # version bump on release — misses the exact key but falls back to the
+      # newest prior cache, so cargo reuses the unchanged deps (arrow, bundled
+      # DuckDB) and only the workspace crate recompiles. registry/src is omitted
+      # (re-extracted from registry/cache) to keep the cache small.
+      - uses: actions/cache@v4
         with:
-          shared-key: check
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.name }}-
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - run: ${{ matrix.command }}
 
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+  # The release profile is a separate, expensive compile (optimized bundled
+  # DuckDB). Its per-PR value is low and release.yml already builds release
+  # binaries on version tags, so verify the release build only on main.
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune --all --force || true
+          df -h /
 
-      - name: Test
-        run: cargo test --all-features
+      - uses: actions/checkout@v4
 
-      - name: Release build
-        run: cargo build --release
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
+      - run: cargo build --release
 
   miri:
     name: Miri
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install Miri
         run: |
@@ -68,10 +123,16 @@ jobs:
           rustup override set nightly
           cargo miri setup
 
-      - name: Cache cargo registry + build
-        uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
         with:
-          shared-key: miri
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-miri-
 
       - name: Test with Miri
         env:
