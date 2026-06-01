@@ -2,15 +2,41 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::chunk::SymbolChunk;
 use crate::embed::Embedder;
+use crate::indexer::docstring::{file_toc_text, symbol_embed_text};
 use crate::store::{ChunkKind, VectorDocument};
 use crate::summarize::rollup::{DEFAULT_TOKEN_THRESHOLD, summarize_file_and_symbols};
 use crate::summarize::{FileSummaryInput, Summarizer};
 use crate::tap::SourceItem;
 
+/// What text gets embedded: LLM summaries, or code documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedMode {
+    Summary,
+    Docstring,
+}
+
+impl EmbedMode {
+    /// Parse from the resolved `embedder.embed_mode` config string.
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "docstring" => EmbedMode::Docstring,
+            _ => EmbedMode::Summary,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EmbedMode::Summary => "summary",
+            EmbedMode::Docstring => "docstring",
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct PipelineResult {
     pub documents: Vec<VectorDocument>,
     pub timing: PipelineTiming,
@@ -26,52 +52,87 @@ pub struct PipelineTiming {
 }
 
 /// Process a [`SourceItem`] (already chunked by a tap) through the
-/// summarize → embed → build VectorDocuments pipeline.
+/// embed → build VectorDocuments pipeline. In [`EmbedMode::Summary`] the
+/// item is summarized by the LLM first; in [`EmbedMode::Docstring`] the
+/// summarizer is skipped entirely and code documentation is embedded.
 pub async fn process_item(
     item: &SourceItem,
-    summarizer: &dyn Summarizer,
+    summarizer: Option<&dyn Summarizer>,
     embedder: &dyn Embedder,
+    mode: EmbedMode,
 ) -> Result<PipelineResult> {
     let language = item.language.as_deref().unwrap_or("unknown");
+    let symbol_count = item.children.len();
 
-    let symbols: Vec<SymbolChunk> = item
-        .children
-        .iter()
-        .map(|c| SymbolChunk {
-            name: c.name.clone(),
-            kind: c.kind.clone(),
-            body: c.content.clone(),
-            signature: c.signature.clone(),
-            doc_comment: None,
-            start_line: c.start_line.unwrap_or(0),
-            end_line: c.end_line.unwrap_or(0),
-            references: c.references.clone(),
-        })
-        .collect();
-
-    let symbol_count = symbols.len();
-
+    // Determine the embed text for the file and each symbol (aligned to
+    // `item.children` by index), plus how long summarization took.
     let t1 = Instant::now();
-    let file_input = FileSummaryInput {
-        file_path: item.source_path.clone(),
-        content: item.content.clone(),
-        imports: vec![],
-        language: language.to_string(),
-    };
-
-    let summary_result =
-        summarize_file_and_symbols(summarizer, &file_input, &symbols, DEFAULT_TOKEN_THRESHOLD)
+    let (file_text, symbol_texts) = match mode {
+        EmbedMode::Summary => {
+            let summarizer = match summarizer {
+                Some(s) => s,
+                None => bail!("summary embed mode requires a summarizer"),
+            };
+            let symbols: Vec<SymbolChunk> = item
+                .children
+                .iter()
+                .map(|c| SymbolChunk {
+                    name: c.name.clone(),
+                    kind: c.kind.clone(),
+                    body: c.content.clone(),
+                    signature: c.signature.clone(),
+                    doc_comment: c.doc_comment.clone(),
+                    start_line: c.start_line.unwrap_or(0),
+                    end_line: c.end_line.unwrap_or(0),
+                    references: c.references.clone(),
+                })
+                .collect();
+            let file_input = FileSummaryInput {
+                file_path: item.source_path.clone(),
+                content: item.content.clone(),
+                imports: vec![],
+                language: language.to_string(),
+            };
+            let summary_result = summarize_file_and_symbols(
+                summarizer,
+                &file_input,
+                &symbols,
+                DEFAULT_TOKEN_THRESHOLD,
+            )
             .await?;
+            let symbol_texts = summary_result
+                .symbol_summaries
+                .into_iter()
+                .map(|s| s.summary)
+                .collect::<Vec<_>>();
+            (summary_result.file_summary, symbol_texts)
+        }
+        EmbedMode::Docstring => {
+            let file_text = file_toc_text(
+                &item.source_path,
+                item.module_doc.as_deref(),
+                &item.children,
+            );
+            let symbol_texts = item
+                .children
+                .iter()
+                .map(|c| {
+                    symbol_embed_text(c.doc_comment.as_deref(), c.signature.as_deref(), &c.name)
+                })
+                .collect::<Vec<_>>();
+            (file_text, symbol_texts)
+        }
+    };
     let summarize_time = t1.elapsed();
 
     let t2 = Instant::now();
     let mut documents = Vec::new();
 
-    let file_embedding = embedder.embed(&summary_result.file_summary).await?;
+    let file_embedding = embedder.embed(&file_text).await?;
     documents.push(VectorDocument {
         id: document_id(&item.source_path, ChunkKind::File, None, &item.content),
         vector: file_embedding,
-        summary: summary_result.file_summary.clone(),
+        summary: file_text,
         file_path: item.source_path.clone(),
         chunk_kind: ChunkKind::File,
         symbol_name: None,
@@ -84,12 +145,8 @@ pub async fn process_item(
         called_by: None,
     });
 
-    for (child, sym_result) in item
-        .children
-        .iter()
-        .zip(summary_result.symbol_summaries.iter())
-    {
-        let embedding = embedder.embed(&sym_result.summary).await?;
+    for (child, text) in item.children.iter().zip(symbol_texts) {
+        let embedding = embedder.embed(&text).await?;
         documents.push(VectorDocument {
             id: document_id(
                 &item.source_path,
@@ -98,7 +155,7 @@ pub async fn process_item(
                 &child.content,
             ),
             vector: embedding,
-            summary: sym_result.summary.clone(),
+            summary: text,
             file_path: item.source_path.clone(),
             chunk_kind: ChunkKind::Symbol,
             symbol_name: Some(child.name.clone()),
@@ -185,12 +242,14 @@ mod tests {
             content: "pub fn hello() {}\npub fn world() {}".into(),
             content_hash: "abc123".into(),
             language: Some("rust".into()),
+            module_doc: None,
             children: vec![
                 SourceChunk {
                     name: "hello".into(),
                     kind: "function".into(),
                     content: "pub fn hello() {}".into(),
                     signature: Some("pub fn hello()".into()),
+                    doc_comment: None,
                     start_line: Some(1),
                     end_line: Some(1),
                     references: vec!["println".into()],
@@ -200,6 +259,7 @@ mod tests {
                     kind: "function".into(),
                     content: "pub fn world() {}".into(),
                     signature: Some("pub fn world()".into()),
+                    doc_comment: None,
                     start_line: Some(2),
                     end_line: Some(2),
                     references: vec![],
@@ -215,7 +275,9 @@ mod tests {
         let embedder = MockEmbedder::new(8);
         let item = sample_source_item();
 
-        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
+        let result = process_item(&item, Some(&summarizer), &embedder, EmbedMode::Summary)
+            .await
+            .unwrap();
 
         assert_eq!(result.documents.len(), 3);
         assert_eq!(result.symbol_count, 2);
@@ -249,10 +311,13 @@ mod tests {
             content: "Fix the login bug".into(),
             content_hash: "def456".into(),
             language: None,
+            module_doc: None,
             children: vec![],
         };
 
-        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
+        let result = process_item(&item, Some(&summarizer), &embedder, EmbedMode::Summary)
+            .await
+            .unwrap();
 
         assert_eq!(result.documents.len(), 1);
         assert_eq!(result.symbol_count, 0);
@@ -263,13 +328,86 @@ mod tests {
 
     #[cfg_attr(miri, ignore)]
     #[tokio::test]
+    async fn process_item_docstring_mode_skips_summarizer() {
+        let embedder = MockEmbedder::new(8);
+        let mut item = sample_source_item();
+        item.module_doc = Some("Greeting helpers.".into());
+        item.children[0].doc_comment = Some("Says hello.".into());
+
+        // No summarizer at all — docstring mode must not require one.
+        let result = process_item(&item, None, &embedder, EmbedMode::Docstring)
+            .await
+            .unwrap();
+
+        assert_eq!(result.documents.len(), 3);
+
+        let hello = result
+            .documents
+            .iter()
+            .find(|d| d.symbol_name.as_deref() == Some("hello"))
+            .expect("hello symbol");
+        assert_eq!(hello.summary, "Says hello.\npub fn hello()");
+
+        // Undocumented symbol falls back to its signature.
+        let world = result
+            .documents
+            .iter()
+            .find(|d| d.symbol_name.as_deref() == Some("world"))
+            .expect("world symbol");
+        assert_eq!(world.summary, "pub fn world()");
+
+        let file_doc = result
+            .documents
+            .iter()
+            .find(|d| d.chunk_kind == ChunkKind::File)
+            .unwrap();
+        assert!(file_doc.summary.contains("Greeting helpers."));
+        assert!(file_doc.summary.contains("pub fn hello()"));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn process_item_docstring_mode_no_docs_does_not_error() {
+        // The critical case: a file whose symbols have NO docstrings and no
+        // module doc must still index successfully.
+        let embedder = MockEmbedder::new(8);
+        let item = sample_source_item(); // all doc_comments are None, module_doc None
+
+        let result = process_item(&item, None, &embedder, EmbedMode::Docstring)
+            .await
+            .expect("undocumented code must not error");
+
+        assert_eq!(result.documents.len(), 3);
+        for doc in &result.documents {
+            assert!(!doc.summary.is_empty(), "embed text must be non-empty");
+            assert_eq!(doc.vector.len(), 8);
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn process_item_summary_mode_requires_summarizer() {
+        let embedder = MockEmbedder::new(8);
+        let item = sample_source_item();
+        let err = process_item(&item, None, &embedder, EmbedMode::Summary)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("summarizer"));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
     async fn process_item_ids_are_deterministic() {
         let summarizer = MockSummarizer::new();
         let embedder = MockEmbedder::new(8);
         let item = sample_source_item();
 
-        let r1 = process_item(&item, &summarizer, &embedder).await.unwrap();
-        let r2 = process_item(&item, &summarizer, &embedder).await.unwrap();
+        let r1 = process_item(&item, Some(&summarizer), &embedder, EmbedMode::Summary)
+            .await
+            .unwrap();
+        let r2 = process_item(&item, Some(&summarizer), &embedder, EmbedMode::Summary)
+            .await
+            .unwrap();
 
         for (d1, d2) in r1.documents.iter().zip(r2.documents.iter()) {
             assert_eq!(d1.id, d2.id);
@@ -283,7 +421,9 @@ mod tests {
         let embedder = MockEmbedder::new(8);
         let item = sample_source_item();
 
-        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
+        let result = process_item(&item, Some(&summarizer), &embedder, EmbedMode::Summary)
+            .await
+            .unwrap();
 
         let ids: Vec<&str> = result.documents.iter().map(|d| d.id.as_str()).collect();
         let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
@@ -297,7 +437,9 @@ mod tests {
         let embedder = MockEmbedder::new(8);
         let item = sample_source_item();
 
-        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
+        let result = process_item(&item, Some(&summarizer), &embedder, EmbedMode::Summary)
+            .await
+            .unwrap();
 
         let hello = result
             .documents
@@ -317,7 +459,9 @@ mod tests {
         let embedder = MockEmbedder::new(8);
         let item = sample_source_item();
 
-        let result = process_item(&item, &summarizer, &embedder).await.unwrap();
+        let result = process_item(&item, Some(&summarizer), &embedder, EmbedMode::Summary)
+            .await
+            .unwrap();
 
         let file_doc = result
             .documents

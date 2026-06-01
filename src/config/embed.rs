@@ -5,6 +5,9 @@ pub struct EmbedConfig {
     pub provider: String,
     pub model: String,
     pub batch_size: usize,
+    /// What text is embedded: `summary` (LLM summaries) or `docstring`
+    /// (code documentation + signatures, skipping the LLM).
+    pub embed_mode: String,
 
     pub voyage_api_key: String,
     pub openai_api_key: String,
@@ -16,6 +19,7 @@ pub struct EmbedSources {
     pub provider: Source,
     pub model: Source,
     pub batch_size: Source,
+    pub embed_mode: Source,
     pub voyage_api_key: Source,
     pub openai_api_key: Source,
     pub ollama_host: Source,
@@ -51,6 +55,10 @@ impl EmbedConfig {
             "WDPKR_EMBED_BATCH_SIZE",
             file_or_resolved(f.and_then(|e| e.batch_size), 64),
         );
+        let embed_mode: Resolved<String> = env_or_resolved(
+            "WDPKR_EMBED_MODE",
+            file_or_resolved(f.and_then(|e| e.embed_mode.clone()), "summary".into()),
+        );
         let voyage_api_key: Resolved<String> = env_or_resolved(
             "VOYAGE_API_KEY",
             file_or_resolved(f.and_then(|e| e.voyage_api_key.clone()), String::new()),
@@ -72,6 +80,7 @@ impl EmbedConfig {
                 provider: provider.value.clone(),
                 model: model.value,
                 batch_size: batch_size.value,
+                embed_mode: embed_mode.value,
                 voyage_api_key: voyage_api_key.value,
                 openai_api_key: openai_api_key.value,
                 ollama_host: ollama_host.value,
@@ -80,6 +89,7 @@ impl EmbedConfig {
                 provider: provider.source,
                 model: model.source,
                 batch_size: batch_size.source,
+                embed_mode: embed_mode.source,
                 voyage_api_key: voyage_api_key.source,
                 openai_api_key: openai_api_key.source,
                 ollama_host: ollama_host.source,
@@ -92,6 +102,12 @@ impl EmbedConfig {
     /// API call. Not called by `Config::new` itself, so subcommands that do
     /// not hit the embedder (e.g. `wdpkr config get`) work without keys.
     pub fn validate(&self) -> Result<()> {
+        if !matches!(self.embed_mode.as_str(), "summary" | "docstring") {
+            bail!(
+                "embedder.embed_mode must be 'summary' or 'docstring', got '{}'",
+                self.embed_mode
+            );
+        }
         match self.provider.as_str() {
             "voyage" if self.voyage_api_key.is_empty() => {
                 bail!("VOYAGE_API_KEY is required when embedder.provider=voyage")
@@ -116,6 +132,7 @@ mod tests {
             "WDPKR_EMBED_PROVIDER",
             "WDPKR_EMBED_MODEL",
             "WDPKR_EMBED_BATCH_SIZE",
+            "WDPKR_EMBED_MODE",
             "VOYAGE_API_KEY",
             "OPENAI_API_KEY",
             "OLLAMA_HOST",
@@ -130,8 +147,31 @@ mod tests {
         assert_eq!(cfg.provider, "voyage");
         assert_eq!(cfg.model, "voyage-code-3");
         assert_eq!(cfg.batch_size, 64);
+        assert_eq!(cfg.embed_mode, "summary");
         assert_eq!(cfg.ollama_host, "http://localhost:11434");
         assert_eq!(cfg.voyage_api_key, "");
+    }
+
+    #[test]
+    #[serial]
+    fn embed_mode_env_override() {
+        clear_env();
+        set_env("WDPKR_EMBED_MODE", "docstring");
+        let cfg = EmbedConfig::from_env(&None);
+        assert_eq!(cfg.embed_mode, "docstring");
+        clear_env();
+    }
+
+    #[test]
+    #[serial]
+    fn validate_rejects_unknown_embed_mode() {
+        clear_env();
+        set_env("WDPKR_EMBED_MODE", "bananas");
+        set_env("WDPKR_EMBED_PROVIDER", "ollama");
+        let cfg = EmbedConfig::from_env(&None);
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("embed_mode"));
+        clear_env();
     }
 
     #[test]

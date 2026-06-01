@@ -34,12 +34,8 @@ impl VoyageEmbedder {
         })
     }
 
-    async fn call_api(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        let body = serde_json::json!({
-            "model": self.model,
-            "input": texts,
-            "input_type": "document",
-        });
+    async fn call_api(&self, texts: &[&str], input_type: &str) -> Result<Vec<Vec<f32>>> {
+        let body = build_request_body(&self.model, texts, input_type);
 
         for attempt in 0..=MAX_RETRIES {
             let resp = self
@@ -84,7 +80,7 @@ impl VoyageEmbedder {
 #[async_trait]
 impl Embedder for VoyageEmbedder {
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let results = self.call_api(&[text]).await?;
+        let results = self.call_api(&[text], "document").await?;
         results
             .into_iter()
             .next()
@@ -94,9 +90,17 @@ impl Embedder for VoyageEmbedder {
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let mut all = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(MAX_BATCH) {
-            all.extend(self.call_api(chunk).await?);
+            all.extend(self.call_api(chunk, "document").await?);
         }
         Ok(all)
+    }
+
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        let results = self.call_api(&[text], "query").await?;
+        results
+            .into_iter()
+            .next()
+            .context("Voyage returned empty result")
     }
 
     fn dimension(&self) -> usize {
@@ -111,6 +115,14 @@ impl Embedder for VoyageEmbedder {
     fn model_name(&self) -> &str {
         &self.model
     }
+}
+
+fn build_request_body(model: &str, texts: &[&str], input_type: &str) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "input": texts,
+        "input_type": input_type,
+    })
 }
 
 fn dimension_for_model(model: &str) -> usize {
@@ -144,6 +156,17 @@ struct EmbeddingData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_body_sets_input_type() {
+        let doc = build_request_body("voyage-code-3", &["hello"], "document");
+        assert_eq!(doc["input_type"], "document");
+        assert_eq!(doc["model"], "voyage-code-3");
+        assert_eq!(doc["input"][0], "hello");
+
+        let query = build_request_body("voyage-code-3", &["hello"], "query");
+        assert_eq!(query["input_type"], "query");
+    }
 
     #[test]
     fn dimension_lookup() {
@@ -188,6 +211,7 @@ mod tests {
             provider: "voyage".into(),
             model: "voyage-code-3".into(),
             batch_size: 64,
+            embed_mode: "summary".into(),
             voyage_api_key: String::new(),
             openai_api_key: String::new(),
             ollama_host: "http://localhost:11434".into(),
@@ -201,6 +225,7 @@ mod tests {
             provider: "voyage".into(),
             model: "voyage-code-3".into(),
             batch_size: 64,
+            embed_mode: "summary".into(),
             voyage_api_key: "test-key".into(),
             openai_api_key: String::new(),
             ollama_host: "http://localhost:11434".into(),

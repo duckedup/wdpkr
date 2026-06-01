@@ -25,6 +25,10 @@ pub struct FileChunks {
     pub language: String,
     /// Full file content, passed to the file-level summarizer.
     pub file_content: String,
+    /// Module-level doc comment (`//!` in Rust, a leading file comment, or a
+    /// module docstring in Python). Used to build the file-level "table of
+    /// contents" vector in docstring embed mode.
+    pub module_doc: Option<String>,
     /// Structured imports — `(module, imported_names)` tuples. Passed to
     /// the file-level summarizer as context and stored as metadata on the
     /// file-level vector.
@@ -201,6 +205,7 @@ mod tests {
             file_path: "README.md".into(),
             language: "markdown".into(),
             file_content: "# Hello".into(),
+            module_doc: None,
             imports: vec![],
             symbols: vec![],
         };

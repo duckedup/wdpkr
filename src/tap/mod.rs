@@ -69,6 +69,10 @@ pub struct SourceItem {
     pub content_hash: String,
     /// Programming language (if applicable).
     pub language: Option<String>,
+    /// Module-level doc comment for the whole item (code only). Used to build
+    /// the file-level "table of contents" vector in docstring embed mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_doc: Option<String>,
     /// Sub-items: symbols for code, sections for documents, etc.
     #[serde(default)]
     pub children: Vec<SourceChunk>,
@@ -86,6 +90,9 @@ pub struct SourceChunk {
     /// Function/method signature (code only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Cleaned doc comment / docstring (code only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_comment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,11 +214,13 @@ mod tests {
             content: "fn main() {}".into(),
             content_hash: "abc123".into(),
             language: Some("rust".into()),
+            module_doc: None,
             children: vec![SourceChunk {
                 name: "main".into(),
                 kind: "function".into(),
                 content: "fn main() {}".into(),
                 signature: Some("fn main()".into()),
+                doc_comment: None,
                 start_line: Some(1),
                 end_line: Some(1),
                 references: vec!["println".into()],
@@ -232,6 +241,7 @@ mod tests {
             content: "Fix the login bug".into(),
             content_hash: "def456".into(),
             language: None,
+            module_doc: None,
             children: vec![],
         };
         let json = serde_json::to_string(&item).unwrap();
@@ -249,6 +259,7 @@ mod tests {
             content: "fn test() {}".into(),
             content_hash: "hash1".into(),
             language: Some("rust".into()),
+            module_doc: None,
             children: vec![],
         }];
         let tap = MockTap::new("test", items);
@@ -271,6 +282,7 @@ mod tests {
                 content: "fn a() {}".into(),
                 content_hash: "hash_a".into(),
                 language: Some("rust".into()),
+                module_doc: None,
                 children: vec![],
             },
             SourceItem {
@@ -278,6 +290,7 @@ mod tests {
                 content: "fn b() {}".into(),
                 content_hash: "hash_b".into(),
                 language: Some("rust".into()),
+                module_doc: None,
                 children: vec![],
             },
         ];
@@ -302,6 +315,7 @@ mod tests {
             content: "fn a() {}".into(),
             content_hash: "hash_a".into(),
             language: Some("rust".into()),
+            module_doc: None,
             children: vec![],
         }];
         let tap = MockTap::new("test", items);

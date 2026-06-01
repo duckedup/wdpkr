@@ -30,7 +30,7 @@ impl Chunker for TreeSitterChunker {
     fn chunk(&self, file_path: &str, content: &str, language: &str) -> anyhow::Result<FileChunks> {
         let config = languages::get_config(language);
 
-        let (imports, symbols) = match config {
+        let (module_doc, imports, symbols) = match config {
             Some(cfg) => {
                 let mut parser = Parser::new();
                 parser
@@ -38,20 +38,26 @@ impl Chunker for TreeSitterChunker {
                     .map_err(|e| anyhow::anyhow!("failed to set language for {language}: {e}"))?;
 
                 match parser.parse(content, None) {
-                    Some(tree) => extract_all(&tree.root_node(), content, &cfg),
+                    Some(tree) => {
+                        let root = tree.root_node();
+                        let module_doc = extract_module_doc(&root, content, &cfg, language);
+                        let (imports, symbols) = extract_all(&root, content, &cfg, language);
+                        (module_doc, imports, symbols)
+                    }
                     None => {
                         eprintln!("warning: tree-sitter failed to parse {file_path}");
-                        (vec![], vec![])
+                        (None, vec![], vec![])
                     }
                 }
             }
-            None => (vec![], vec![]),
+            None => (None, vec![], vec![]),
         };
 
         Ok(FileChunks {
             file_path: file_path.to_string(),
             language: language.to_string(),
             file_content: content.to_string(),
+            module_doc,
             imports,
             symbols,
         })
@@ -62,6 +68,7 @@ fn extract_all(
     root: &Node,
     source: &str,
     config: &LanguageConfig,
+    language: &str,
 ) -> (Vec<Import>, Vec<SymbolChunk>) {
     let mut imports = Vec::new();
     let mut symbols = Vec::new();
@@ -77,7 +84,7 @@ fn extract_all(
         }
 
         if config.symbol_types.contains(&kind)
-            && let Some(sym) = extract_symbol(&child, source, config)
+            && let Some(sym) = extract_symbol(&child, source, config, language)
         {
             symbols.push(sym);
         }
@@ -99,7 +106,9 @@ fn extract_all(
                             | "function_definition"
                             | "constructor_declaration"
                     );
-                if is_extractable && let Some(sym) = extract_symbol(&inner_child, source, config) {
+                if is_extractable
+                    && let Some(sym) = extract_symbol(&inner_child, source, config, language)
+                {
                     symbols.push(sym);
                 }
             }
@@ -109,7 +118,49 @@ fn extract_all(
     (imports, symbols)
 }
 
-fn extract_symbol(node: &Node, source: &str, config: &LanguageConfig) -> Option<SymbolChunk> {
+/// Extract a module-level doc comment: `//!`-style leading comments, a
+/// leading file comment, or (Python) the module docstring.
+fn extract_module_doc(
+    root: &Node,
+    source: &str,
+    config: &LanguageConfig,
+    language: &str,
+) -> Option<String> {
+    let src = source.as_bytes();
+
+    if language == "python" {
+        // Module docstring: first statement is a string expression.
+        return docstring_from_body(root, src);
+    }
+
+    // Other languages: collect the run of comment nodes at the top of file.
+    let mut cursor = root.walk();
+    let mut docs = Vec::new();
+    for child in root.children(&mut cursor) {
+        if config.comment_types.contains(&child.kind()) {
+            if let Ok(text) = child.utf8_text(src) {
+                let cleaned = clean_doc_comment(text, language);
+                if !cleaned.is_empty() {
+                    docs.push(cleaned);
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    if docs.is_empty() {
+        None
+    } else {
+        Some(docs.join("\n"))
+    }
+}
+
+fn extract_symbol(
+    node: &Node,
+    source: &str,
+    config: &LanguageConfig,
+    language: &str,
+) -> Option<SymbolChunk> {
     let src = source.as_bytes();
 
     // For export_statement and decorated_definition, the name lives on
@@ -143,11 +194,17 @@ fn extract_symbol(node: &Node, source: &str, config: &LanguageConfig) -> Option<
 
     let signature = extract_signature(node, source);
 
-    let doc_comment = node
-        .prev_sibling()
-        .filter(|sib| config.comment_types.contains(&sib.kind()))
-        .and_then(|sib| sib.utf8_text(src).ok())
-        .map(|s| s.to_string());
+    let doc_comment = if language == "python" {
+        // Python docstrings are the first string statement inside the body,
+        // not a preceding comment.
+        docstring_from_body(node, src)
+    } else {
+        node.prev_sibling()
+            .filter(|sib| config.comment_types.contains(&sib.kind()))
+            .and_then(|sib| sib.utf8_text(src).ok())
+            .map(|s| clean_doc_comment(s, language))
+            .filter(|s| !s.is_empty())
+    };
 
     let references = extract_references(node, source, config);
 
@@ -173,6 +230,164 @@ fn extract_symbol(node: &Node, source: &str, config: &LanguageConfig) -> Option<
         end_line,
         references,
     })
+}
+
+/// Strip comment markers from a raw doc comment, producing clean prose.
+/// For JS/TS/TSX JSDoc blocks, also folds `@param`/`@returns`/`@description`
+/// tags into readable text.
+fn clean_doc_comment(raw: &str, language: &str) -> String {
+    let raw = raw.trim();
+    let is_jsdoc =
+        matches!(language, "javascript" | "typescript" | "tsx") && raw.starts_with("/**");
+
+    // Unwrap block comment delimiters.
+    let inner = raw
+        .strip_prefix("/**")
+        .or_else(|| raw.strip_prefix("/*"))
+        .map(|s| s.strip_suffix("*/").unwrap_or(s))
+        .unwrap_or(raw);
+
+    let mut lines: Vec<String> = Vec::new();
+    for line in inner.lines() {
+        let mut l = line.trim();
+        for marker in ["///", "//!", "//"] {
+            if let Some(rest) = l.strip_prefix(marker) {
+                l = rest;
+                break;
+            }
+        }
+        // Leading " * " / "*" from block-comment continuation lines.
+        if let Some(rest) = l.strip_prefix("* ") {
+            l = rest;
+        } else if l == "*" {
+            l = "";
+        } else if let Some(rest) = l.strip_prefix('*') {
+            l = rest;
+        }
+        lines.push(l.trim().to_string());
+    }
+
+    if is_jsdoc {
+        return fold_jsdoc(&lines);
+    }
+    lines.join("\n").trim().to_string()
+}
+
+/// Fold JSDoc tag lines into readable prose.
+fn fold_jsdoc(lines: &[String]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("@param") {
+            let rest = strip_jsdoc_type(rest.trim());
+            let mut parts = rest.splitn(2, char::is_whitespace);
+            let name = parts.next().unwrap_or("").trim();
+            let desc = parts.next().unwrap_or("").trim();
+            if name.is_empty() {
+                continue;
+            } else if desc.is_empty() {
+                out.push(name.to_string());
+            } else {
+                out.push(format!("{name}: {desc}"));
+            }
+        } else if let Some(rest) = t
+            .strip_prefix("@returns")
+            .or_else(|| t.strip_prefix("@return"))
+        {
+            let desc = strip_jsdoc_type(rest.trim());
+            if !desc.is_empty() {
+                out.push(format!("Returns: {desc}"));
+            }
+        } else if let Some(rest) = t.strip_prefix("@description") {
+            let desc = rest.trim();
+            if !desc.is_empty() {
+                out.push(desc.to_string());
+            }
+        } else if let Some(rest) = t.strip_prefix('@') {
+            // Unknown tag: keep the text after the tag word.
+            let after = rest
+                .split_once(char::is_whitespace)
+                .map(|x| x.1.trim())
+                .unwrap_or("");
+            if !after.is_empty() {
+                out.push(after.to_string());
+            }
+        } else {
+            out.push(t.to_string());
+        }
+    }
+    out.join("\n").trim().to_string()
+}
+
+/// Drop a leading JSDoc `{type}` annotation if present.
+fn strip_jsdoc_type(s: &str) -> &str {
+    if s.starts_with('{')
+        && let Some(idx) = s.find('}')
+    {
+        return s[idx + 1..].trim_start();
+    }
+    s
+}
+
+/// Extract a Python docstring: the first string statement inside the node's
+/// body (or, for the `module` root, its first statement). Returns cleaned
+/// text with surrounding quotes and indentation removed.
+fn docstring_from_body(node: &Node, src: &[u8]) -> Option<String> {
+    let body = if node.kind() == "module" {
+        *node
+    } else if let Some(b) = node.child_by_field_name("body") {
+        b
+    } else {
+        // decorated_definition: descend to the wrapped def/class.
+        let mut cursor = node.walk();
+        let inner = node
+            .children(&mut cursor)
+            .find(|c| c.child_by_field_name("body").is_some())?;
+        inner.child_by_field_name("body")?
+    };
+
+    let mut cursor = body.walk();
+    let first = body.children(&mut cursor).find(|c| c.kind() != "comment")?;
+    let string_node = match first.kind() {
+        "string" => first,
+        "expression_statement" => {
+            let mut inner = first.walk();
+            first.children(&mut inner).find(|n| n.kind() == "string")?
+        }
+        _ => return None,
+    };
+
+    let text = string_node.utf8_text(src).ok()?;
+    let cleaned = clean_python_docstring(text);
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+/// Strip triple/single quotes and a string prefix from a Python docstring,
+/// then dedent.
+fn clean_python_docstring(raw: &str) -> String {
+    let mut s = raw.trim();
+    let unprefixed = s.trim_start_matches(['r', 'R', 'b', 'B', 'f', 'F', 'u', 'U']);
+    if unprefixed.starts_with('"') || unprefixed.starts_with('\'') {
+        s = unprefixed;
+    }
+    let inner = ["\"\"\"", "'''", "\"", "'"]
+        .iter()
+        .find_map(|q| s.strip_prefix(q).and_then(|rest| rest.strip_suffix(q)))
+        .unwrap_or(s);
+    inner
+        .lines()
+        .map(|l| l.trim())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn extract_signature(node: &Node, source: &str) -> Option<String> {
@@ -399,6 +614,123 @@ pub fn process(input: &str) -> Result<()> {
         let sig = chunks.symbols[0].signature.as_ref().unwrap();
         assert!(sig.contains("pub fn process"), "sig: {sig}");
         assert!(!sig.contains("Ok(())"), "sig should exclude body: {sig}");
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn rust_no_doc_comment_is_none() {
+        // The no-documentation case must not error and must yield None.
+        let chunks = chunk("fn bare() {}", "rust");
+        assert_eq!(chunks.symbols.len(), 1);
+        assert!(chunks.symbols[0].doc_comment.is_none());
+        assert!(chunks.module_doc.is_none());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn rust_module_doc_extracted() {
+        let src = "//! Crate-level docs.\n//! Second line.\n\npub fn f() {}";
+        let chunks = chunk(src, "rust");
+        let doc = chunks.module_doc.expect("module doc");
+        assert!(doc.contains("Crate-level docs."));
+        assert!(doc.contains("Second line."));
+    }
+
+    // ── Doc-comment cleaning ───────────────────────────────────────────
+
+    #[test]
+    fn clean_doc_comment_strips_rust_slashes() {
+        assert_eq!(clean_doc_comment("/// hello", "rust"), "hello");
+        assert_eq!(clean_doc_comment("//! crate", "rust"), "crate");
+    }
+
+    #[test]
+    fn clean_doc_comment_strips_block_stars() {
+        let raw = "/**\n * line one\n * line two\n */";
+        assert_eq!(clean_doc_comment(raw, "java"), "line one\nline two");
+    }
+
+    #[test]
+    fn clean_jsdoc_folds_tags() {
+        let raw =
+            "/**\n * Fetches a user.\n * @param id the user id\n * @returns the user or null\n */";
+        let out = clean_doc_comment(raw, "typescript");
+        assert!(out.contains("Fetches a user."), "out: {out}");
+        assert!(out.contains("id: the user id"), "out: {out}");
+        assert!(out.contains("Returns: the user or null"), "out: {out}");
+        assert!(!out.contains('@'), "tags should be folded: {out}");
+        assert!(!out.contains('*'), "stars should be stripped: {out}");
+    }
+
+    #[test]
+    fn clean_jsdoc_drops_param_type_annotation() {
+        let raw = "/** @param {string} name the name */";
+        let out = clean_doc_comment(raw, "typescript");
+        assert_eq!(out, "name: the name");
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn typescript_jsdoc_attached_to_function() {
+        let src = "/**\n * Adds two numbers.\n * @param a first\n * @returns the sum\n */\nfunction add(a: number, b: number): number { return a + b; }";
+        let chunks = chunk(src, "typescript");
+        let add = chunks.symbols.iter().find(|s| s.name == "add").unwrap();
+        let doc = add.doc_comment.as_ref().expect("jsdoc");
+        assert!(doc.contains("Adds two numbers."), "doc: {doc}");
+        assert!(doc.contains("Returns: the sum"), "doc: {doc}");
+        assert!(!doc.contains('*'), "doc: {doc}");
+    }
+
+    // ── Python docstrings ──────────────────────────────────────────────
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn python_extracts_function_docstring() {
+        let src = "def greet(name):\n    \"\"\"Return a greeting for name.\"\"\"\n    return name";
+        let chunks = chunk(src, "python");
+        let greet = chunks.symbols.iter().find(|s| s.name == "greet").unwrap();
+        assert_eq!(
+            greet.doc_comment.as_deref(),
+            Some("Return a greeting for name.")
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn python_extracts_class_docstring() {
+        let src = "class Person:\n    \"\"\"A person.\"\"\"\n    def __init__(self):\n        pass";
+        let chunks = chunk(src, "python");
+        let person = chunks.symbols.iter().find(|s| s.name == "Person").unwrap();
+        assert_eq!(person.doc_comment.as_deref(), Some("A person."));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn python_module_docstring_extracted() {
+        let src = "\"\"\"Module level docs.\"\"\"\n\ndef f():\n    pass";
+        let chunks = chunk(src, "python");
+        assert_eq!(chunks.module_doc.as_deref(), Some("Module level docs."));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn python_no_docstring_is_none() {
+        // Undocumented Python code must not error and yields None.
+        let src = "def f():\n    return 1";
+        let chunks = chunk(src, "python");
+        let f = chunks.symbols.iter().find(|s| s.name == "f").unwrap();
+        assert!(f.doc_comment.is_none());
+        assert!(chunks.module_doc.is_none());
+    }
+
+    #[test]
+    fn clean_python_docstring_strips_quotes_and_dedents() {
+        assert_eq!(clean_python_docstring("\"\"\"hello\"\"\""), "hello");
+        assert_eq!(clean_python_docstring("'''hi'''"), "hi");
+        assert_eq!(
+            clean_python_docstring("\"\"\"\n    line one\n    line two\n    \"\"\""),
+            "line one\nline two"
+        );
     }
 
     // ── Go ────────────────────────────────────────────────────────────
