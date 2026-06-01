@@ -266,6 +266,11 @@ impl ResolvedConfig {
                 source: s.embed.batch_size.clone(),
             },
             ConfigEntry {
+                key: "embedder.embed_mode",
+                value: c.embed.embed_mode.clone(),
+                source: s.embed.embed_mode.clone(),
+            },
+            ConfigEntry {
                 key: "embedder.ollama_host",
                 value: c.embed.ollama_host.clone(),
                 source: s.embed.ollama_host.clone(),
@@ -385,6 +390,8 @@ pub struct FileEmbedConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_size: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voyage_api_key: Option<String>,
@@ -500,6 +507,9 @@ impl FileConfig {
             }
             "embedder.model" => {
                 self.embedder.get_or_insert_default().model = Some(value.into());
+            }
+            "embedder.embed_mode" => {
+                self.embedder.get_or_insert_default().embed_mode = Some(value.into());
             }
             "embedder.batch_size" => {
                 let parsed: usize = value.parse().with_context(|| {
@@ -798,6 +808,7 @@ indexer:
             "embedder.provider",
             "embedder.model",
             "embedder.batch_size",
+            "embedder.embed_mode",
             "embedder.ollama_host",
             "summarizer.provider",
             "summarizer.model",

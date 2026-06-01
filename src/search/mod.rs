@@ -119,7 +119,7 @@ impl SearchRun {
         };
 
         // 2. Embed the query once
-        let query_vector = self.embedder.embed(&params.query).await?;
+        let query_vector = self.embedder.embed_query(&params.query).await?;
 
         // 3. Search each namespace, collecting tagged results
         let over_fetch = params.top_k * (params.symbols_per_file + 1) * 3;

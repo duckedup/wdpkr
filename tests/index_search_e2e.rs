@@ -11,8 +11,10 @@ use std::process::Command;
 use std::sync::Arc;
 
 use wdpkr::indexer::IndexRun;
+use wdpkr::indexer::pipeline::EmbedMode;
 use wdpkr::search::{SearchParams, SearchRun};
 use wdpkr::store::{Namespace, VectorStore};
+use wdpkr::summarize::Summarizer;
 use wdpkr::tap::Tap;
 use wdpkr::tap::files::FilesTap;
 use wdpkr::testing::mock_embed::MockEmbedder;
@@ -131,11 +133,12 @@ fn build_index_run(dir: &Path, store: MockVectorStore, embedder: MockEmbedder) -
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.to_path_buf()))];
     IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(embedder),
         Arc::new(store),
         Namespace::from("test-e2e"),
         1,
+        EmbedMode::Summary,
     )
 }
 
@@ -212,11 +215,12 @@ async fn index_then_search_round_trip() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     let report = index.run(true).await.unwrap();
     assert!(report.vectors_upserted > 0);
@@ -265,11 +269,12 @@ async fn search_finds_indexed_file_paths() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     index.run(true).await.unwrap();
 
@@ -312,11 +317,12 @@ async fn symbols_appear_nested_under_files() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     index.run(true).await.unwrap();
 
@@ -370,11 +376,12 @@ async fn scope_filter_limits_results_after_index() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     index.run(true).await.unwrap();
 
@@ -420,11 +427,12 @@ async fn incremental_index_only_processes_changed_files() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     let report1 = index.run(true).await.unwrap();
     let initial_count = report1.files_processed;
@@ -442,11 +450,12 @@ async fn incremental_index_only_processes_changed_files() {
     let taps2: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index2 = IndexRun::new(
         taps2,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     let report2 = index2.run(false).await.unwrap();
 
@@ -473,11 +482,12 @@ async fn incremental_index_removes_stale_symbols() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     index.run(true).await.unwrap();
 
@@ -508,11 +518,12 @@ pub fn release_payment(payee_id: u64, amount: f64) -> Result<(), String> {
     let taps2: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index2 = IndexRun::new(
         taps2,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     index2.run(false).await.unwrap();
 
@@ -539,11 +550,12 @@ async fn json_output_is_valid_after_full_pipeline() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(ArcStore(store.clone())),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     index.run(true).await.unwrap();
 
@@ -594,11 +606,12 @@ async fn full_pipeline_against_real_duckdb() {
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
-        Arc::new(MockSummarizer::new()),
+        Some(Arc::new(MockSummarizer::new()) as Arc<dyn Summarizer>),
         Arc::new(MockEmbedder::new(8)),
         Arc::new(index_store),
         ns.clone(),
         1,
+        EmbedMode::Summary,
     );
     let report = index.run(true).await.unwrap();
     assert!(report.vectors_upserted > 0, "should upsert into DuckDB");
