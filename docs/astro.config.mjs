@@ -61,6 +61,7 @@ export default defineConfig({
           items: [
             { label: "CLI commands", link: "/reference/commands/" },
             { label: "Architecture", link: "/reference/architecture/" },
+            { label: "Evaluation", link: "/reference/evaluation/" },
           ],
         },
       ],
