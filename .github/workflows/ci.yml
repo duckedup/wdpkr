@@ -16,6 +16,16 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # Reclaim ~30 GB by dropping preinstalled toolchains we don't use, so the
+      # DuckDB bundled C++ build + cache restore have headroom. Inlined rather
+      # than pulling in a third-party action.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -24,15 +34,14 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # Swatinem/rust-cache prunes intermediate + workspace artifacts before
+      # saving, so the cache stays bounded. The previous raw `target/` cache
+      # grew to ~4.6 GB (DuckDB's bundled C++ build) and ran the runner out of
+      # disk on restore (`tar: Wrote only N of M bytes`).
       - name: Cache cargo registry + build
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          shared-key: check
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -58,6 +67,11 @@ jobs:
           rustup toolchain install nightly --component miri
           rustup override set nightly
           cargo miri setup
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: miri
 
       - name: Test with Miri
         env:
