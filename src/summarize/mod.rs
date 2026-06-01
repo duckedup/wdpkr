@@ -10,14 +10,15 @@
 //!
 //! Implementation tracks root `SPEC.md` § Summarizer trait.
 
-pub mod anthropic;
 pub mod prompts;
 pub mod rollup;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
+use crate::ai_providers::{self, Capability};
 use crate::chunk::Import;
+use crate::config::SummarizerConfig;
 
 // ── Trait ─────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,25 @@ pub trait Summarizer: Send + Sync {
 
     /// Model name for cost tracking and logging.
     fn model_name(&self) -> &str;
+}
+
+/// Construct a [`Summarizer`] from the resolved config. Consults the provider
+/// registry to reject non-summarizer providers, then dispatches to the
+/// concrete adapter in [`crate::ai_providers`].
+pub fn build_summarizer(config: &SummarizerConfig) -> Result<Box<dyn Summarizer>> {
+    if !ai_providers::supports(&config.provider, Capability::Summarize) {
+        bail!(
+            "provider '{}' is not a valid summarizer; available summarizers: {}",
+            config.provider,
+            ai_providers::names_with(Capability::Summarize).join(", ")
+        );
+    }
+    match config.provider.as_str() {
+        "anthropic" => Ok(Box::new(ai_providers::anthropic::AnthropicSummarizer::new(
+            config,
+        )?)),
+        other => bail!("summarizer provider '{other}' is not yet implemented"),
+    }
 }
 
 // ── Input types ───────────────────────────────────────────────────────────
@@ -128,5 +148,42 @@ mod tests {
         };
         assert!(input.signature.is_none());
         assert!(input.doc_comment.is_none());
+    }
+
+    // ── Factory ───────────────────────────────────────────────────────
+
+    #[test]
+    fn build_summarizer_non_summarizer_provider_errors() {
+        // OpenAI is an embedder, not a summarizer — the registry rejects it.
+        let config = SummarizerConfig {
+            provider: "openai".into(),
+            model: "gpt-4".into(),
+            api_key: "key".into(),
+        };
+        assert!(build_summarizer(&config).is_err());
+    }
+
+    #[test]
+    fn build_summarizer_anthropic_without_key_errors() {
+        let config = SummarizerConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5-20251001".into(),
+            api_key: String::new(),
+        };
+        match build_summarizer(&config) {
+            Ok(_) => panic!("should fail without API key"),
+            Err(e) => assert!(e.to_string().contains("ANTHROPIC_API_KEY")),
+        }
+    }
+
+    #[test]
+    fn build_summarizer_anthropic_with_key_succeeds() {
+        let config = SummarizerConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5-20251001".into(),
+            api_key: "test-key".into(),
+        };
+        let s = build_summarizer(&config).unwrap();
+        assert_eq!(s.model_name(), "claude-haiku-4-5-20251001");
     }
 }

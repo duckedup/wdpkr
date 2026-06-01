@@ -2,7 +2,7 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
@@ -22,8 +22,6 @@ bd close <id>         # Complete work
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
 ## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
@@ -36,6 +34,7 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -96,15 +95,17 @@ src/
 ├── cli/          # Clap parsing + subcommand dispatch
 ├── config/       # 4-layer resolution: defaults → file → env → CLI flags
 ├── chunk/        # tree-sitter AST chunking (8 languages)
-├── summarize/    # Anthropic adapter + prompt templates + big-file rollup
-├── embed/        # Voyage / Ollama / OpenAI adapters
+├── ai_providers/ # All model-backend adapters: voyage/openai/ollama (embed) + anthropic (summarize) + capability registry
+├── http/         # Shared reqwest retry: RetryPolicy + send_with_retry (used by ai_providers + store)
+├── summarize/    # Summarizer trait + prompt templates + big-file rollup + build_summarizer factory
+├── embed/        # Embedder trait + build_embedder factory
 ├── store/        # VectorStore trait + Turbopuffer + DuckDB (local) adapters
 ├── search/       # Search orchestration + JSON/pretty output
 ├── indexer/      # Full pipeline: git diff → walk → chunk → summarize → embed → upsert
 └── testing/      # Mocks (store, embedder, summarizer) + fixtures
 ```
 
-All external API adapters share the same pattern: reqwest HTTP client, bounded exponential-backoff retry on 429/5xx, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
+Provider adapters live in one place (`ai_providers/`); the `embed` and `summarize` modules own their traits and a factory that consults `ai_providers::PROVIDERS` (a capability registry — `Embed`/`Summarize`) before dispatching. Voyage is embed-only by design. All HTTP adapters (AI providers and the Turbopuffer store) share `http::send_with_retry`: a reqwest client, bounded exponential-backoff retry on transient send errors and retryable statuses, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
 
 ## Conventions & Patterns
 

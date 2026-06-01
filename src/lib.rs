@@ -1,8 +1,10 @@
+pub mod ai_providers;
 pub mod chunk;
 pub mod cli;
 pub mod config;
 pub mod embed;
 pub mod eval;
+pub mod http;
 pub mod indexer;
 pub mod search;
 pub mod store;
