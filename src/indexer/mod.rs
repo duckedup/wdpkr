@@ -104,16 +104,25 @@ impl IndexRun {
                 }
             }
 
-            if let Some(stored_mode) = meta.extra.get(EMBED_MODE_META_KEY)
-                && !full
-                && stored_mode != self.mode.as_str()
-            {
-                bail!(
-                    "embed mode mismatch: index was built in '{stored_mode}' mode, \
-                     but indexer is configured for '{}'; \
-                     run with --full to reindex",
-                    self.mode.as_str()
-                );
+            // A namespace indexed before this feature has no embed_mode key;
+            // treat it as legacy "summary" so switching to docstring still
+            // requires --full. A brand-new namespace (never indexed, no
+            // embedder recorded) is exempt so a first-time docstring index
+            // doesn't need --full.
+            if meta.embedder.is_some() && !full {
+                let stored_mode = meta
+                    .extra
+                    .get(EMBED_MODE_META_KEY)
+                    .map(String::as_str)
+                    .unwrap_or("summary");
+                if stored_mode != self.mode.as_str() {
+                    bail!(
+                        "embed mode mismatch: index was built in '{stored_mode}' mode, \
+                         but indexer is configured for '{}'; \
+                         run with --full to reindex",
+                        self.mode.as_str()
+                    );
+                }
             }
 
             let stored_hashes = self.store.get_content_hashes(&ns).await.unwrap_or_default();
@@ -795,6 +804,65 @@ mod tests {
             EmbedMode::Docstring,
         );
         let report = run.run(true).await.unwrap();
+        assert_eq!(report.files_processed, 2);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_legacy_index_without_mode_key_blocks_docstring_incremental() {
+        // A namespace indexed before this feature has an embedder but no
+        // embed_mode key. Switching to docstring incrementally must error.
+        let store = Arc::new(MockVectorStore::new());
+        store
+            .create_namespace(&Namespace::from("test"), 8)
+            .await
+            .unwrap();
+        store
+            .set_metadata(
+                &Namespace::from("test"),
+                &NamespaceMetadata {
+                    hwm_sha: Some("old-sha".into()),
+                    embedder: Some("mock/mock-embed-v1".into()),
+                    ..Default::default() // no embed_mode key
+                },
+            )
+            .await
+            .unwrap();
+
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::new("files", vec![]));
+        let run = IndexRun::new(
+            vec![tap],
+            None,
+            Arc::new(MockEmbedder::new(8)),
+            store,
+            Namespace::from("test"),
+            1,
+            EmbedMode::Docstring,
+        );
+        let err = run.run(false).await.unwrap_err();
+        assert!(
+            err.to_string().contains("embed mode mismatch"),
+            "legacy summary index must block docstring incremental, got: {err}"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn index_run_fresh_namespace_allows_docstring_incremental() {
+        // A brand-new namespace (no embedder recorded) must allow a first
+        // docstring index without requiring --full.
+        let store = Arc::new(MockVectorStore::new());
+        let tap: Arc<dyn Tap> = Arc::new(MockTap::new("files", sample_items()));
+        let run = IndexRun::new(
+            vec![tap],
+            None,
+            Arc::new(MockEmbedder::new(8)),
+            store,
+            Namespace::from("fresh"),
+            1,
+            EmbedMode::Docstring,
+        );
+        let report = run.run(false).await.unwrap();
         assert_eq!(report.files_processed, 2);
     }
 

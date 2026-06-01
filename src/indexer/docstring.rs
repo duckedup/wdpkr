@@ -7,6 +7,13 @@
 
 use crate::tap::SourceChunk;
 
+/// Char budget for the file-level "table of contents" embed text. Keeps a
+/// huge generated file (hundreds of symbols) from producing an input that
+/// exceeds the embedder's token limit. Dropped signatures still get their
+/// own symbol-level vectors, so search recall is unaffected. Parallels the
+/// big-file rollup guard in summary mode.
+const MAX_TOC_CHARS: usize = 24_000;
+
 /// Embed text for a single symbol: its cleaned docstring (if any) followed by
 /// its signature. Never includes the body. Falls back to the signature alone
 /// when undocumented, and to the symbol name when there is no signature.
@@ -28,7 +35,9 @@ pub fn file_toc_text(
     children: &[SourceChunk],
 ) -> String {
     let mut parts = vec![file_path.to_string()];
+    let mut len = parts[0].len();
     if let Some(doc) = module_doc.map(str::trim).filter(|s| !s.is_empty()) {
+        len += doc.len() + 1;
         parts.push(doc.to_string());
     }
     for child in children {
@@ -38,9 +47,14 @@ pub fn file_toc_text(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(child.name.as_str());
-        if !line.is_empty() {
-            parts.push(line.to_string());
+        if line.is_empty() {
+            continue;
         }
+        if len + line.len() + 1 > MAX_TOC_CHARS {
+            break;
+        }
+        len += line.len() + 1;
+        parts.push(line.to_string());
     }
     parts.join("\n")
 }
@@ -131,5 +145,16 @@ mod tests {
         let children = vec![chunk("CONSTANT", None)];
         let text = file_toc_text("src/lib.rs", None, &children);
         assert_eq!(text, "src/lib.rs\nCONSTANT");
+    }
+
+    #[test]
+    fn file_toc_caps_huge_files() {
+        // Thousands of symbols must not produce an unbounded embed input.
+        let sig = "pub fn some_reasonably_long_function_name(argument: SomeType) -> Result<()>";
+        let children: Vec<SourceChunk> = (0..5000).map(|_| chunk("f", Some(sig))).collect();
+        let text = file_toc_text("src/generated.rs", None, &children);
+        assert!(text.len() <= MAX_TOC_CHARS, "len was {}", text.len());
+        // The path is always retained even when truncating.
+        assert!(text.starts_with("src/generated.rs"));
     }
 }
