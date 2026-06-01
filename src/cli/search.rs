@@ -176,6 +176,19 @@ mod tests {
     #[serial]
     async fn run_fails_without_store_credentials() {
         clear_env();
+        // Point config resolution at an empty dir so Config::new() can't pick
+        // up a real ~/.config/wdpkr/config.yaml (which would supply a store
+        // credential and let the run reach the embedder).
+        let cfg_home = std::env::temp_dir().join(format!(
+            "wdpkr-search-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&cfg_home).unwrap();
+        set_env("XDG_CONFIG_HOME", cfg_home.to_str().unwrap());
         set_env("WDPKR_NAMESPACE", "test-repo");
         set_env("VOYAGE_API_KEY", "fake-key");
         let args = SearchArgs {
@@ -194,5 +207,6 @@ mod tests {
             "should fail on missing store credential; got: {err}"
         );
         clear_env();
+        std::fs::remove_dir_all(&cfg_home).ok();
     }
 }
