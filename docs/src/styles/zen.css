@@ -1,0 +1,367 @@
+/* ────────────────────────────────────────────────────────────────────────
+   wdpkr — "field notes" theme
+
+   A quiet, woodland-zen reading surface on the Nord palette. Generous negative
+   space, hairline rules, one Frost accent. Aurora red appears exactly once —
+   the woodpecker's crest. Fraunces (display) + Hanken Grotesk (text) +
+   JetBrains Mono (code).
+
+   Nord
+     Polar Night  nord0 #2E3440  nord1 #3B4252  nord2 #434C5E  nord3 #4C566A
+     Snow Storm   nord4 #D8DEE9  nord5 #E5E9F0  nord6 #ECEFF4
+     Frost        nord7 #8FBCBB  nord8 #88C0D0  nord9 #81A1C1  nord10 #5E81AC
+     Aurora       nord11 #BF616A (red) · nord14 #A3BE8C (green) — used sparingly
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Typography */
+  --sl-font: "Hanken Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo,
+    monospace;
+  --wd-display: "Fraunces Variable", Georgia, "Times New Roman", serif;
+
+  /* A little more air than Starlight's defaults */
+  --sl-line-height: 1.72;
+  --sl-content-width: 46rem;
+  --sl-nav-height: 4.25rem;
+
+  /* Brand tokens */
+  --wd-frost: #88c0d0;
+  --wd-frost-deep: #5e81ac;
+  --wd-crest: #bf616a;
+  --wd-leaf: #a3be8c;
+}
+
+/* ── Dark theme (default) — Polar Night ground, Snow Storm text ────────────*/
+:root,
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #243240;
+  --sl-color-accent: #5e81ac;
+  --sl-color-accent-high: #a6d2db;
+
+  --sl-color-white: #eceff4;
+  --sl-color-gray-1: #e5e9f0;
+  --sl-color-gray-2: #d8dee9;
+  --sl-color-gray-3: #9aa5b8;
+  --sl-color-gray-4: #4c566a;
+  --sl-color-gray-5: #3b4252;
+  --sl-color-gray-6: #313846;
+  --sl-color-black: #2e3440;
+
+  --sl-color-bg-nav: rgba(46, 52, 64, 0.72);
+  --sl-color-bg-sidebar: var(--sl-color-black);
+  --sl-color-hairline: #353c4a;
+  --sl-color-hairline-light: #3b4252;
+  --sl-color-hairline-shade: #272d38;
+  --sl-color-bg-inline-code: #353d4c;
+  --sl-color-text-invert: #2e3440;
+  --wd-surface: #313846;
+}
+
+/* ── Light theme — Snow Storm ground, Polar Night text ─────────────────────*/
+:root[data-theme="light"] {
+  --sl-color-accent-low: #d8e3ef;
+  --sl-color-accent: #5e81ac;
+  --sl-color-accent-high: #3b5a80;
+
+  --sl-color-white: #2e3440;
+  --sl-color-gray-1: #3b4252;
+  --sl-color-gray-2: #434c5e;
+  --sl-color-gray-3: #586073;
+  --sl-color-gray-4: #7b8694;
+  --sl-color-gray-5: #b9c1ce;
+  --sl-color-gray-6: #dde3ec;
+  --sl-color-gray-7: #eceff4;
+  --sl-color-black: #f5f7fa;
+
+  --sl-color-bg-nav: rgba(245, 247, 250, 0.78);
+  --sl-color-bg-sidebar: var(--sl-color-black);
+  --sl-color-hairline: #dde3ec;
+  --sl-color-hairline-light: #e5e9f0;
+  --sl-color-hairline-shade: #e9edf3;
+  --sl-color-bg-inline-code: #e5e9f0;
+  --sl-color-text-invert: #eceff4;
+  --wd-surface: #ffffff;
+}
+
+/* ── Global polish ─────────────────────────────────────────────────────────*/
+
+::selection {
+  background: color-mix(in srgb, var(--wd-frost) 35%, transparent);
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Frosted, hairline-bottomed top bar */
+.header {
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+/* Display type — Fraunces, optical, calm */
+.site-title,
+.hero h1,
+.sl-markdown-content :is(h1, h2),
+.feature h3,
+.next-card .next-title {
+  font-family: var(--wd-display);
+  font-optical-sizing: auto;
+  font-weight: 540;
+  font-variation-settings: "SOFT" 28, "WONK" 0;
+  letter-spacing: -0.005em;
+}
+
+.site-title {
+  font-size: 1.32rem;
+  letter-spacing: -0.01em;
+}
+.site-title img,
+a.site-title img {
+  height: 2rem;
+  width: auto;
+}
+
+.sl-markdown-content h1 {
+  font-weight: 560;
+  letter-spacing: -0.012em;
+}
+.sl-markdown-content h2 {
+  margin-top: 2.75rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--sl-color-hairline);
+}
+.sl-markdown-content :is(h3, h4) {
+  font-weight: 600;
+  letter-spacing: -0.006em;
+}
+
+/* Links: quiet by default, frost on hover */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-decoration-color: color-mix(in srgb, var(--sl-color-accent) 45%, transparent);
+  text-underline-offset: 0.22em;
+  transition: text-decoration-color 0.15s ease, color 0.15s ease;
+}
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-color: var(--sl-color-accent);
+}
+
+/* Sidebar: airier, lighter, frost active state */
+.sidebar-content {
+  padding-top: 1rem;
+}
+.sidebar-content .large {
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--sl-color-gray-3);
+}
+a.sidebar-link {
+  border-radius: 0.4rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+a.sidebar-link:hover {
+  background: color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
+}
+a.sidebar-link[aria-current="page"],
+a.sidebar-link[aria-current="page"]:hover {
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-accent-high);
+  font-weight: 500;
+}
+
+/* Inline + block code */
+.sl-markdown-content code:not(:where(.not-content *)) {
+  font-size: 0.875em;
+  border-radius: 0.35rem;
+  padding: 0.15em 0.4em;
+}
+.expressive-code {
+  margin: 1.4rem 0;
+}
+.expressive-code .frame pre {
+  border-radius: 0.5rem;
+}
+
+/* Tables + blockquotes: hairlines only */
+.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
+  border-color: var(--sl-color-hairline);
+}
+.sl-markdown-content th:not(:where(.not-content *)) {
+  font-weight: 600;
+  color: var(--sl-color-white);
+}
+.sl-markdown-content blockquote:not(:where(.not-content *)) {
+  border-inline-start: 2px solid var(--sl-color-accent);
+  padding-inline-start: 1.1rem;
+  color: var(--sl-color-gray-3);
+  font-style: normal;
+}
+
+/* ── Splash / landing hero ─────────────────────────────────────────────────*/
+
+.hero {
+  padding-block: 1.5rem 2.5rem;
+}
+.hero h1 {
+  font-size: clamp(2.6rem, 1.8rem + 3.4vw, 4.25rem);
+  line-height: 1.02;
+}
+.hero .tagline {
+  font-family: var(--sl-font);
+  color: var(--sl-color-gray-3);
+  font-size: clamp(1.05rem, 1rem + 0.6vw, 1.3rem);
+  line-height: 1.6;
+  max-width: 42ch;
+}
+/* A whisper of frost behind the mark — the only flourish */
+.hero > img,
+.hero .hero-html img {
+  filter: drop-shadow(0 0 3rem color-mix(in srgb, var(--wd-frost) 20%, transparent));
+}
+.hero .actions a[data-variant="primary"] {
+  background: var(--sl-color-accent);
+  border-color: var(--sl-color-accent);
+  color: var(--sl-color-text-invert);
+}
+.hero .actions a[data-variant="primary"]:hover {
+  background: var(--wd-frost);
+  border-color: var(--wd-frost);
+  color: #2e3440;
+}
+.hero .actions a[data-variant="minimal"] {
+  border-color: var(--sl-color-hairline-light);
+}
+
+/* ── Bespoke feature cards (landing) ───────────────────────────────────────*/
+
+.lede {
+  font-size: 1.18rem;
+  line-height: 1.6;
+  color: var(--sl-color-gray-2);
+  max-width: 60ch;
+  margin: 0.5rem 0 2.5rem;
+}
+.lede strong {
+  color: var(--sl-color-white);
+}
+
+.section-kicker {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+  margin: 3rem 0 1.25rem;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+@media (max-width: 50rem) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.feature {
+  position: relative;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--wd-surface) 55%, transparent);
+  padding: 1.6rem 1.6rem 1.5rem;
+  transition: border-color 0.2s ease, transform 0.2s ease, background-color 0.2s ease;
+}
+.feature:hover {
+  border-color: color-mix(in srgb, var(--wd-frost) 55%, transparent);
+  transform: translateY(-2px);
+}
+.feature .num {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--wd-frost-deep);
+}
+:root[data-theme="dark"] .feature .num {
+  color: var(--wd-frost);
+}
+.feature h3 {
+  margin: 0.45rem 0 0.5rem;
+  font-size: 1.32rem;
+  line-height: 1.2;
+  color: var(--sl-color-white);
+}
+.feature p {
+  margin: 0;
+  color: var(--sl-color-gray-3);
+  line-height: 1.6;
+}
+
+/* ── "Where next" nav cards ────────────────────────────────────────────────*/
+
+.next-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+@media (max-width: 50rem) {
+  .next-grid {
+    grid-template-columns: 1fr;
+  }
+}
+a.next-card {
+  display: block;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 0.75rem;
+  padding: 1.4rem 1.5rem;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+a.next-card:hover {
+  border-color: color-mix(in srgb, var(--wd-frost) 60%, transparent);
+  transform: translateY(-2px);
+}
+.next-card .next-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.12rem;
+  color: var(--sl-color-white);
+}
+.next-card .next-title::after {
+  content: "→";
+  font-family: var(--sl-font-mono);
+  color: var(--wd-frost-deep);
+  transition: transform 0.2s ease;
+}
+:root[data-theme="dark"] .next-card .next-title::after {
+  color: var(--wd-frost);
+}
+a.next-card:hover .next-title::after {
+  transform: translateX(4px);
+}
+.next-card p {
+  margin: 0.4rem 0 0;
+  color: var(--sl-color-gray-3);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feature,
+  .feature:hover,
+  a.next-card,
+  a.next-card:hover,
+  a.sidebar-link,
+  .next-card .next-title::after {
+    transition: none;
+    transform: none;
+  }
+}

@@ -31,6 +31,20 @@ lint:
 test:
     cargo test --all-features
 
+# ── Docs site (Astro + Starlight, in docs/) ─────────────────────────────────
+
+# Run the docs dev server with live reload (installs deps on first run)
+docs:
+    cd docs && bun install && bun run dev
+
+# Build the docs site to docs/dist/
+docs-build:
+    cd docs && bun install && bun run build
+
+# Preview the production docs build locally
+docs-preview:
+    cd docs && bun run preview
+
 # Run tests within a single module/path (e.g. `just test-mod config`)
 test-mod MOD:
     cargo test --all-features {{ MOD }}

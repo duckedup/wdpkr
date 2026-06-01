@@ -168,3 +168,23 @@ backend is compiled in by default; build with `--no-default-features` to exclude
 | `wdpkr config list` | Show all config values and their sources |
 | `wdpkr config get <key>` | Get a single config value |
 | `wdpkr config set <key> <val>` | Set a config value |
+
+## Documentation
+
+The docs site lives in [`docs/`](docs/) — Astro + Starlight, published to
+[wdpkr.duckedup.org](https://wdpkr.duckedup.org) on merge to `main`. It uses
+[Bun](https://bun.sh).
+
+```bash
+just docs          # dev server with live reload (http://localhost:4321)
+just docs-build    # production build → docs/dist/
+just docs-preview  # preview the production build
+```
+
+Or directly:
+
+```bash
+cd docs
+bun install
+bun run dev
+```
