@@ -23,14 +23,14 @@ impl FilesTap {
         Self { root }
     }
 
-    fn chunk_file(&self, rel_path: &str, content: &str) -> Vec<SourceChunk> {
+    fn chunk_file(&self, rel_path: &str, content: &str) -> (Option<String>, Vec<SourceChunk>) {
         let language = detect_language(rel_path).unwrap_or("unknown");
         let chunker = TreeSitterChunker::new();
         let chunks = match chunker.chunk(rel_path, content, language) {
             Ok(c) => c,
-            Err(_) => return vec![],
+            Err(_) => return (None, vec![]),
         };
-        chunks
+        let children = chunks
             .symbols
             .into_iter()
             .map(|sym| SourceChunk {
@@ -38,22 +38,25 @@ impl FilesTap {
                 kind: sym.kind,
                 content: sym.body,
                 signature: sym.signature,
+                doc_comment: sym.doc_comment,
                 start_line: Some(sym.start_line),
                 end_line: Some(sym.end_line),
                 references: sym.references,
             })
-            .collect()
+            .collect();
+        (chunks.module_doc, children)
     }
 
     fn build_item(&self, rel_path: &str, content: String) -> SourceItem {
         let content_hash = blake3::hash(content.as_bytes()).to_hex()[..16].to_string();
         let language = detect_language(rel_path).map(String::from);
-        let children = self.chunk_file(rel_path, &content);
+        let (module_doc, children) = self.chunk_file(rel_path, &content);
         SourceItem {
             source_path: rel_path.to_string(),
             content,
             content_hash,
             language,
+            module_doc,
             children,
         }
     }

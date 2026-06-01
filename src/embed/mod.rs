@@ -13,8 +13,19 @@ use crate::config::EmbedConfig;
 
 #[async_trait]
 pub trait Embedder: Send + Sync {
+    /// Embed a document (the indexed side). Voyage tags these with
+    /// `input_type: "document"`.
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+
+    /// Embed a search query. Embedding models like Voyage produce better
+    /// retrieval when queries are tagged `input_type: "query"` instead of
+    /// `"document"`. Defaults to [`embed`](Self::embed) for providers that
+    /// make no document/query distinction.
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text).await
+    }
+
     fn dimension(&self) -> usize;
     fn max_input_tokens(&self) -> usize;
     fn provider_name(&self) -> &str;
@@ -91,6 +102,7 @@ mod tests {
             provider: "voyage".into(),
             model: "voyage-code-3".into(),
             batch_size: 64,
+            embed_mode: "summary".into(),
             voyage_api_key: "test-key".into(),
             openai_api_key: String::new(),
             ollama_host: "http://localhost:11434".into(),
@@ -107,6 +119,7 @@ mod tests {
             provider: "openai".into(),
             model: "text-embedding-3-large".into(),
             batch_size: 64,
+            embed_mode: "summary".into(),
             voyage_api_key: String::new(),
             openai_api_key: "test-key".into(),
             ollama_host: "http://localhost:11434".into(),
@@ -123,6 +136,7 @@ mod tests {
             provider: "voyage".into(),
             model: "voyage-code-3".into(),
             batch_size: 64,
+            embed_mode: "summary".into(),
             voyage_api_key: String::new(),
             openai_api_key: String::new(),
             ollama_host: "http://localhost:11434".into(),
@@ -137,6 +151,7 @@ mod tests {
             provider: "cohere".into(),
             model: "embed-v3".into(),
             batch_size: 64,
+            embed_mode: "summary".into(),
             voyage_api_key: String::new(),
             openai_api_key: String::new(),
             ollama_host: "http://localhost:11434".into(),

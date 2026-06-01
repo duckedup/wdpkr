@@ -8,8 +8,10 @@ use owo_colors::{OwoColorize, Stream};
 use crate::config::Config;
 use crate::embed::build_embedder;
 use crate::indexer::cost::{self, ProviderRates};
+use crate::indexer::pipeline::EmbedMode;
 use crate::indexer::{IndexRun, resolve_namespace};
 use crate::store::build_store;
+use crate::summarize::Summarizer;
 use crate::summarize::build_summarizer;
 use crate::tap::build_taps;
 
@@ -40,6 +42,12 @@ pub struct IndexArgs {
     #[arg(long)]
     pub skip_summaries: bool,
 
+    /// Embed code documentation (docstring + signature) instead of LLM
+    /// summaries. Skips the summarizer entirely — zero Anthropic cost.
+    /// Overrides the `embedder.embed_mode` config.
+    #[arg(long)]
+    pub docstring: bool,
+
     /// Run only this configured tap (default: all)
     #[arg(long)]
     pub tap: Option<String>,
@@ -60,33 +68,47 @@ pub async fn run(args: IndexArgs) -> Result<()> {
         return run_skip_summaries(&config).await;
     }
 
+    let mode = if args.docstring {
+        EmbedMode::Docstring
+    } else {
+        EmbedMode::from_config(&config.embed.embed_mode)
+    };
+
     config.store.validate()?;
     config.embed.validate()?;
-    config.summarizer.validate()?;
+    if mode == EmbedMode::Summary {
+        config.summarizer.validate()?;
+    }
 
     let namespace = resolve_namespace(&config)?;
-    let summarizer = build_summarizer(&config.summarizer)?;
+    // Docstring mode skips the LLM entirely — no summarizer is built.
+    let summarizer: Option<Arc<dyn Summarizer>> = match mode {
+        EmbedMode::Summary => Some(Arc::from(build_summarizer(&config.summarizer)?)),
+        EmbedMode::Docstring => None,
+    };
     let embedder = build_embedder(&config.embed).await?;
     let store = build_store(&config.store, embedder.dimension())?;
 
     eprintln!(
-        "Indexing into namespace '{}' with {}/{}...",
+        "Indexing into namespace '{}' with {}/{} ({} mode)...",
         namespace
             .as_str()
             .if_supports_color(Stream::Stderr, |s| s.cyan()),
         embedder.provider_name(),
         embedder.model_name(),
+        mode.as_str(),
     );
 
     let root = std::env::current_dir()?;
     let taps = build_taps(&config.taps, root, args.tap.as_deref())?;
     let index_run = IndexRun::new(
         taps,
-        Arc::from(summarizer),
+        summarizer,
         Arc::from(embedder),
         Arc::from(store),
         namespace,
         args.concurrency,
+        mode,
     );
     let report = index_run.run(args.full).await?;
 

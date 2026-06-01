@@ -142,7 +142,17 @@ mod tests {
                 assert!(args.from.is_none());
                 assert!(args.max_cost.is_none());
                 assert!(args.tap.is_none());
+                assert!(!args.docstring);
             }
+            _ => panic!("expected Index"),
+        }
+    }
+
+    #[test]
+    fn index_parses_docstring_flag() {
+        let cli = Cli::try_parse_from(["wdpkr", "index", "--docstring"]).unwrap();
+        match cli.command {
+            Command::Index(args) => assert!(args.docstring),
             _ => panic!("expected Index"),
         }
     }
