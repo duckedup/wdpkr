@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::search::{SearchParams, SearchRun};
 
-use super::metrics::{self, CompressionMetrics, RelevanceMetrics};
+use super::metrics::{self, CompressionMetrics, RelevanceMetrics, SymbolRelevanceMetrics};
 use super::{EvalCase, EvalSuite};
 
 // ── Source reader trait ──────────────────────────────────────────────────
@@ -41,8 +41,10 @@ impl SourceReader for FsSourceReader {
 pub struct CaseResult {
     pub query: String,
     pub label: Option<String>,
+    pub tags: Vec<String>,
     pub compression: CompressionMetrics,
     pub relevance: Option<RelevanceMetrics>,
+    pub symbol_relevance: Option<SymbolRelevanceMetrics>,
     pub files_returned: usize,
     pub elapsed_ms: u64,
 }
@@ -52,6 +54,7 @@ pub struct SuiteResult {
     pub suite_name: String,
     pub cases: Vec<CaseResult>,
     pub summary: SuiteSummary,
+    pub by_tag: Vec<TagStats>,
     pub elapsed_ms: u64,
 }
 
@@ -62,6 +65,20 @@ pub struct SuiteSummary {
     pub median_compression_ratio: f64,
     pub mean_precision_at_k: Option<f64>,
     pub mean_recall_at_k: Option<f64>,
+    pub mean_reciprocal_rank: Option<f64>,
+    pub mean_symbol_recall: Option<f64>,
+    pub mean_symbol_reciprocal_rank: Option<f64>,
+}
+
+/// Aggregated metrics for all cases carrying a given tag. A case with
+/// multiple tags contributes to each.
+#[derive(Debug, Clone, Serialize)]
+pub struct TagStats {
+    pub tag: String,
+    pub cases: usize,
+    pub mean_precision_at_k: Option<f64>,
+    pub mean_recall_at_k: Option<f64>,
+    pub mean_reciprocal_rank: Option<f64>,
 }
 
 // ── Runner ───────────────────────────────────────────────────────────────
@@ -85,10 +102,12 @@ impl EvalRunner {
         }
 
         let summary = compute_summary(&case_results);
+        let by_tag = compute_by_tag(&case_results);
         Ok(SuiteResult {
             suite_name: suite.name.clone(),
             cases: case_results,
             summary,
+            by_tag,
             elapsed_ms: start.elapsed().as_millis() as u64,
         })
     }
@@ -129,11 +148,29 @@ impl EvalRunner {
             ))
         };
 
+        let symbol_relevance = if case.expected_symbols.is_empty() {
+            None
+        } else {
+            // Flatten symbols into rank order: files in result order, symbols
+            // in per-file order.
+            let returned_symbols: Vec<String> = report
+                .results
+                .iter()
+                .flat_map(|f| f.symbols.iter().map(|s| s.name.clone()))
+                .collect();
+            Some(metrics::symbol_relevance(
+                &returned_symbols,
+                &case.expected_symbols,
+            ))
+        };
+
         Ok(CaseResult {
             query: case.query.clone(),
             label: case.label.clone(),
+            tags: case.tags.clone(),
             compression,
             relevance,
+            symbol_relevance,
             files_returned: report.results.len(),
             elapsed_ms: start.elapsed().as_millis() as u64,
         })
@@ -172,13 +209,78 @@ fn compute_summary(cases: &[CaseResult]) -> SuiteSummary {
         Some(recalls.iter().sum::<f64>() / recalls.len() as f64)
     };
 
+    let rrs: Vec<f64> = cases
+        .iter()
+        .filter_map(|c| c.relevance.as_ref().map(|r| r.reciprocal_rank))
+        .collect();
+    let mean_reciprocal_rank = mean(&rrs);
+
+    let sym_recalls: Vec<f64> = cases
+        .iter()
+        .filter_map(|c| c.symbol_relevance.as_ref().map(|r| r.recall))
+        .collect();
+    let mean_symbol_recall = mean(&sym_recalls);
+
+    let sym_rrs: Vec<f64> = cases
+        .iter()
+        .filter_map(|c| c.symbol_relevance.as_ref().map(|r| r.reciprocal_rank))
+        .collect();
+    let mean_symbol_reciprocal_rank = mean(&sym_rrs);
+
     SuiteSummary {
         total_cases,
         mean_compression_ratio,
         median_compression_ratio,
         mean_precision_at_k,
         mean_recall_at_k,
+        mean_reciprocal_rank,
+        mean_symbol_recall,
+        mean_symbol_reciprocal_rank,
     }
+}
+
+fn mean(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.iter().sum::<f64>() / values.len() as f64)
+    }
+}
+
+/// Aggregate relevance metrics per tag. A case contributes to each of its tags.
+fn compute_by_tag(cases: &[CaseResult]) -> Vec<TagStats> {
+    use std::collections::BTreeMap;
+
+    let mut tags: BTreeMap<String, Vec<&CaseResult>> = BTreeMap::new();
+    for case in cases {
+        for tag in &case.tags {
+            tags.entry(tag.clone()).or_default().push(case);
+        }
+    }
+
+    tags.into_iter()
+        .map(|(tag, group)| {
+            let ps: Vec<f64> = group
+                .iter()
+                .filter_map(|c| c.relevance.as_ref().map(|r| r.precision_at_k))
+                .collect();
+            let rs: Vec<f64> = group
+                .iter()
+                .filter_map(|c| c.relevance.as_ref().map(|r| r.recall_at_k))
+                .collect();
+            let mrrs: Vec<f64> = group
+                .iter()
+                .filter_map(|c| c.relevance.as_ref().map(|r| r.reciprocal_rank))
+                .collect();
+            TagStats {
+                tag,
+                cases: group.len(),
+                mean_precision_at_k: mean(&ps),
+                mean_recall_at_k: mean(&rs),
+                mean_reciprocal_rank: mean(&mrrs),
+            }
+        })
+        .collect()
 }
 
 fn median(values: &[f64]) -> f64 {
@@ -284,6 +386,7 @@ mod tests {
         let case = EvalCase {
             query: "what is main".into(),
             expected_files: vec![],
+            expected_symbols: vec![],
             top_k: 5,
             label: Some("main-test".into()),
             tags: vec![],
@@ -304,6 +407,7 @@ mod tests {
         let case = EvalCase {
             query: "what is main".into(),
             expected_files: vec!["src/main.rs".into()],
+            expected_symbols: vec![],
             top_k: 5,
             label: None,
             tags: vec![],
@@ -328,16 +432,18 @@ mod tests {
                 EvalCase {
                     query: "what is main".into(),
                     expected_files: vec!["src/main.rs".into()],
+                    expected_symbols: vec![],
                     top_k: 5,
                     label: Some("main".into()),
-                    tags: vec![],
+                    tags: vec!["nl".into()],
                 },
                 EvalCase {
                     query: "what is lib".into(),
                     expected_files: vec!["src/lib.rs".into()],
+                    expected_symbols: vec![],
                     top_k: 5,
                     label: Some("lib".into()),
-                    tags: vec![],
+                    tags: vec!["nl".into()],
                 },
             ],
         };
@@ -346,6 +452,34 @@ mod tests {
         assert_eq!(result.cases.len(), 2);
         assert_eq!(result.summary.total_cases, 2);
         assert!(result.summary.mean_recall_at_k.is_some());
+
+        // Both cases share the "nl" tag → one tag group covering 2 cases.
+        assert_eq!(result.by_tag.len(), 1);
+        assert_eq!(result.by_tag[0].tag, "nl");
+        assert_eq!(result.by_tag[0].cases, 2);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn run_case_symbol_relevance() {
+        let (search, reader) = setup().await;
+        let runner = EvalRunner::new(search, Box::new(reader));
+
+        // The mock store returns file-level docs only (no symbols), so an
+        // expected symbol is graded as missed — exercising the symbol path.
+        let case = EvalCase {
+            query: "what is main".into(),
+            expected_files: vec![],
+            expected_symbols: vec!["nonexistent_symbol".into()],
+            top_k: 5,
+            label: None,
+            tags: vec![],
+        };
+
+        let result = runner.run_case(&case).await.unwrap();
+        let sym = result.symbol_relevance.expect("symbol relevance computed");
+        assert_eq!(sym.recall, 0.0);
+        assert_eq!(sym.missed, vec!["nonexistent_symbol"]);
     }
 
     #[test]

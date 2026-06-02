@@ -169,6 +169,50 @@ backend is compiled in by default; build with `--no-default-features` to exclude
 | `wdpkr config get <key>` | Get a single config value |
 | `wdpkr config set <key> <val>` | Set a config value |
 
+## Evaluation
+
+wdpkr ships a retrieval eval harness. Cases live in `eval/cases/*.json` (query +
+expected files/symbols); run them against a live index with:
+
+```bash
+wdpkr eval                          # default suite
+wdpkr eval eval/cases/wdpkr-deep.json --tag keyword   # filter by tag
+```
+
+Each case reports **recall@k**, **MRR** (rank of the first relevant file),
+**symbol recall**, and a **compression ratio** (result tokens ÷ tokens of the
+files you'd otherwise read). A `By tag` breakdown slices the suite by query style.
+
+### Results — docstring mode, local DuckDB
+
+The numbers below are the `wdpkr-deep` suite (32 cases) run against wdpkr's own
+codebase, indexed in **`--docstring` mode** (embeds code documentation +
+signatures, **no LLM summaries**) with **`voyage-code-3`** into a local
+**DuckDB** store.
+
+| Metric | Value |
+|---|---|
+| Recall@5 (file) | **0.95** |
+| MRR (file) | **0.81** |
+| Symbol recall | 0.60 |
+| Symbol MRR | 0.27 |
+| Compression ratio | 0.25 |
+
+By query style:
+
+| Style | n | Recall@5 | MRR |
+|---|---|---|---|
+| keyword | 6 | 1.00 | 0.87 |
+| where-is | 2 | 1.00 | 1.00 |
+| natural-language | 20 | 0.97 | 0.84 |
+| concept | 3 | 1.00 | 0.67 |
+
+**Takeaways:** file-level retrieval is strong and top-heavy — the right file is
+returned ~95% of the time and is usually rank 1–2, even with no LLM in the
+indexing path. Keyword and "where is X" queries rank best; broad conceptual
+phrasings rank lower. Symbol-level precision is the weakest spot (Symbol MRR
+0.27): the correct *file* often ranks well before the correct *symbol* surfaces.
+
 ## Documentation
 
 The docs site lives in [`docs/`](docs/) — Astro + Starlight, published to

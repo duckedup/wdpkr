@@ -9,6 +9,10 @@ pub struct EvalCase {
     pub query: String,
     #[serde(default)]
     pub expected_files: Vec<String>,
+    /// Symbol names that should appear among the returned symbols (graded
+    /// independently of `expected_files`). Empty = no symbol-level grading.
+    #[serde(default)]
+    pub expected_symbols: Vec<String>,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
     #[serde(default)]

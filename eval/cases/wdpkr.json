@@ -82,6 +82,82 @@
       ],
       "top_k": 5,
       "tags": ["testing"]
+    },
+    {
+      "label": "tap-system",
+      "query": "How does the tap system fetch items from a data source and detect changed files?",
+      "expected_files": [
+        "src/tap/mod.rs",
+        "src/tap/files.rs"
+      ],
+      "top_k": 5,
+      "tags": ["tap"]
+    },
+    {
+      "label": "external-tap-subprocess",
+      "query": "How does wdpkr run an external tap as a subprocess over a JSON stdio protocol?",
+      "expected_files": [
+        "src/tap/process.rs"
+      ],
+      "top_k": 5,
+      "tags": ["tap"]
+    },
+    {
+      "label": "duckdb-store",
+      "query": "How does the local DuckDB vector store persist and search embeddings?",
+      "expected_files": [
+        "src/store/duckdb.rs"
+      ],
+      "top_k": 5,
+      "tags": ["store"]
+    },
+    {
+      "label": "docstring-embed-mode",
+      "query": "How are docstrings extracted and embedded instead of LLM summaries?",
+      "expected_files": [
+        "src/indexer/docstring.rs",
+        "src/chunk/tree_sitter.rs"
+      ],
+      "top_k": 5,
+      "tags": ["docstring", "indexer"]
+    },
+    {
+      "label": "call-graph-resolution",
+      "query": "How are call graph edges resolved between symbols across files?",
+      "expected_files": [
+        "src/indexer/mod.rs"
+      ],
+      "top_k": 5,
+      "tags": ["indexer", "callgraph"]
+    },
+    {
+      "label": "cost-estimation",
+      "query": "How is indexing cost estimated during a dry run before making API calls?",
+      "expected_files": [
+        "src/indexer/cost.rs"
+      ],
+      "top_k": 5,
+      "tags": ["indexer", "cost"]
+    },
+    {
+      "label": "eval-harness",
+      "query": "How does the eval harness measure retrieval relevance and context compression?",
+      "expected_files": [
+        "src/eval/runner.rs",
+        "src/eval/metrics.rs"
+      ],
+      "top_k": 5,
+      "tags": ["eval"]
+    },
+    {
+      "label": "retry-backoff",
+      "query": "How do API adapters retry with exponential backoff on rate limits and server errors?",
+      "expected_files": [
+        "src/embed/voyage.rs",
+        "src/summarize/anthropic.rs"
+      ],
+      "top_k": 5,
+      "tags": ["embed", "summarize"]
     }
   ]
 }

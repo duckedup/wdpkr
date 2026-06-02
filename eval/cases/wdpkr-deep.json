@@ -1,0 +1,203 @@
+{
+  "name": "wdpkr-deep-eval",
+  "description": "Deep retrieval eval for wdpkr against its own docstring-mode index. Cases are tagged by query style (nl, keyword, symbol, where, concept) so metrics can be sliced by phrasing. Gold sets are kept tight (1-2 primary files) so MRR and recall are meaningful.",
+  "cases": [
+    {
+      "label": "git-diff-nl",
+      "query": "How does wdpkr compute the git diff of changed files between two commits?",
+      "expected_files": ["src/indexer/git.rs"],
+      "tags": ["nl", "git"]
+    },
+    {
+      "label": "git-diff-keyword",
+      "query": "git diff changed deleted files between shas",
+      "expected_files": ["src/indexer/git.rs"],
+      "tags": ["keyword", "git"]
+    },
+    {
+      "label": "walk-gitignore-nl",
+      "query": "How are repository files walked while respecting gitignore rules?",
+      "expected_files": ["src/indexer/walk.rs"],
+      "tags": ["nl", "walk"]
+    },
+    {
+      "label": "walk-gitignore-keyword",
+      "query": "walk files respect gitignore hidden",
+      "expected_files": ["src/indexer/walk.rs"],
+      "tags": ["keyword", "walk"]
+    },
+    {
+      "label": "change-detection-nl",
+      "query": "How does change detection skip files whose content has not changed since last index?",
+      "expected_files": ["src/tap/files.rs"],
+      "tags": ["nl", "tap"]
+    },
+    {
+      "label": "document-id-symbol",
+      "query": "document_id deterministic blake3 hash for idempotent upserts",
+      "expected_files": ["src/indexer/pipeline.rs"],
+      "expected_symbols": ["document_id"],
+      "tags": ["symbol", "indexer"]
+    },
+    {
+      "label": "idempotent-upsert-concept",
+      "query": "idempotent upserts stable ids on re-index",
+      "expected_files": ["src/indexer/pipeline.rs"],
+      "tags": ["concept", "indexer"]
+    },
+    {
+      "label": "rollup-nl",
+      "query": "How are very large files summarized when they exceed the token threshold?",
+      "expected_files": ["src/summarize/rollup.rs"],
+      "expected_symbols": ["summarize_file_and_symbols"],
+      "tags": ["nl", "summarize"]
+    },
+    {
+      "label": "rollup-keyword",
+      "query": "big file rollup token threshold",
+      "expected_files": ["src/summarize/rollup.rs"],
+      "tags": ["keyword", "summarize"]
+    },
+    {
+      "label": "prompt-templates-nl",
+      "query": "What prompt templates are sent to the summarizer model?",
+      "expected_files": ["src/summarize/prompts.rs"],
+      "tags": ["nl", "summarize"]
+    },
+    {
+      "label": "anthropic-adapter-nl",
+      "query": "How does the Anthropic summarizer call the Messages API with retries?",
+      "expected_files": ["src/summarize/anthropic.rs"],
+      "tags": ["nl", "summarize"]
+    },
+    {
+      "label": "input-type-nl",
+      "query": "How are search queries embedded differently from indexed documents?",
+      "expected_files": ["src/embed/voyage.rs", "src/search/mod.rs"],
+      "expected_symbols": ["embed_query"],
+      "tags": ["nl", "embed"]
+    },
+    {
+      "label": "input-type-keyword",
+      "query": "voyage input_type query versus document",
+      "expected_files": ["src/embed/voyage.rs"],
+      "tags": ["keyword", "embed"]
+    },
+    {
+      "label": "duckdb-cosine-nl",
+      "query": "How does the local store rank vectors by cosine distance with brute force search?",
+      "expected_files": ["src/store/duckdb.rs"],
+      "tags": ["nl", "store"]
+    },
+    {
+      "label": "turbopuffer-v2-nl",
+      "query": "How does the Turbopuffer adapter use the v2 upsert and query API?",
+      "expected_files": ["src/store/turbopuffer.rs"],
+      "tags": ["nl", "store"]
+    },
+    {
+      "label": "callgraph-nl",
+      "query": "How are caller and callee edges resolved between symbols across files?",
+      "expected_files": ["src/indexer/mod.rs"],
+      "expected_symbols": ["resolve_call_edges"],
+      "tags": ["nl", "callgraph"]
+    },
+    {
+      "label": "cost-estimate-nl",
+      "query": "How is the cost of an index run estimated without calling any APIs?",
+      "expected_files": ["src/indexer/cost.rs"],
+      "tags": ["nl", "cost"]
+    },
+    {
+      "label": "search-output-nl",
+      "query": "How are search results rendered as JSON and human-readable pretty output?",
+      "expected_files": ["src/search/output.rs"],
+      "tags": ["nl", "search"]
+    },
+    {
+      "label": "tiered-results-concept",
+      "query": "results grouped into files with nested symbols tiered ranking",
+      "expected_files": ["src/search/mod.rs"],
+      "tags": ["concept", "search"]
+    },
+    {
+      "label": "cli-dispatch-nl",
+      "query": "How are CLI subcommands parsed and dispatched to handlers?",
+      "expected_files": ["src/cli/mod.rs"],
+      "tags": ["nl", "cli"]
+    },
+    {
+      "label": "jsdoc-cleaning-nl",
+      "query": "How are JSDoc comments cleaned and folded into readable text?",
+      "expected_files": ["src/chunk/tree_sitter.rs"],
+      "tags": ["nl", "chunk"]
+    },
+    {
+      "label": "python-docstring-nl",
+      "query": "How are Python docstrings extracted from the first statement of a function body?",
+      "expected_files": ["src/chunk/tree_sitter.rs"],
+      "tags": ["nl", "chunk"]
+    },
+    {
+      "label": "language-config-concept",
+      "query": "per language node types symbols comments imports",
+      "expected_files": ["src/chunk/languages.rs"],
+      "tags": ["concept", "chunk"]
+    },
+    {
+      "label": "mock-embedder-nl",
+      "query": "How does the mock embedder produce deterministic vectors for tests?",
+      "expected_files": ["src/testing/mock_embed.rs"],
+      "tags": ["nl", "testing"]
+    },
+    {
+      "label": "mock-store-nl",
+      "query": "How does the mock vector store implement in-memory search?",
+      "expected_files": ["src/testing/mock_store.rs"],
+      "tags": ["nl", "testing"]
+    },
+    {
+      "label": "namespace-derivation-nl",
+      "query": "How is the index namespace derived from the git remote URL?",
+      "expected_files": ["src/indexer/mod.rs"],
+      "expected_symbols": ["resolve_namespace"],
+      "tags": ["nl", "indexer"]
+    },
+    {
+      "label": "embed-batching-keyword",
+      "query": "batch embeddings against provider max batch size",
+      "expected_files": ["src/embed/voyage.rs", "src/embed/openai.rs"],
+      "tags": ["keyword", "embed"]
+    },
+    {
+      "label": "ollama-probe-nl",
+      "query": "How does the Ollama embedder probe its embedding dimension on startup?",
+      "expected_files": ["src/embed/ollama.rs"],
+      "tags": ["nl", "embed"]
+    },
+    {
+      "label": "config-set-nl",
+      "query": "How does setting a dotted config key write it back to the config file?",
+      "expected_files": ["src/config/mod.rs"],
+      "tags": ["nl", "config"]
+    },
+    {
+      "label": "store-trait-where",
+      "query": "Where is the VectorStore trait defined?",
+      "expected_files": ["src/store/mod.rs"],
+      "tags": ["where", "store"]
+    },
+    {
+      "label": "retry-backoff-keyword",
+      "query": "exponential backoff retry on 429 and 5xx",
+      "expected_files": ["src/embed/voyage.rs", "src/summarize/anthropic.rs"],
+      "tags": ["keyword", "embed"]
+    },
+    {
+      "label": "docstring-builders-where",
+      "query": "Where are the docstring and signature embed text builders?",
+      "expected_files": ["src/indexer/docstring.rs"],
+      "tags": ["where", "docstring"]
+    }
+  ]
+}
