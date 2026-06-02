@@ -1,20 +1,14 @@
 //! Embedder abstraction.
 //!
 //! Defines the [`Embedder`] trait for embedding natural-language summaries
-//! into dense vectors. Three adapters ship in v1:
-//! - **Voyage** (`voyage.rs`) — default, code-trained model
-//! - **Ollama** (`ollama.rs`) — local/offline, free iteration
-//! - **OpenAI** (`openai.rs`) — widely available fallback
-//!
-//! [`build_embedder`] dispatches on [`EmbedConfig::provider`].
-
-pub mod ollama;
-pub mod openai;
-pub mod voyage;
+//! into dense vectors. The concrete adapters live in [`crate::ai_providers`]
+//! (Voyage, OpenAI, Ollama); [`build_embedder`] consults the provider
+//! registry and dispatches on [`EmbedConfig::provider`].
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 
+use crate::ai_providers::{self, Capability};
 use crate::config::EmbedConfig;
 
 #[async_trait]
@@ -46,10 +40,19 @@ pub fn embedder_identity(embedder: &dyn Embedder) -> String {
 /// is async (dimension probe), so the factory is async.
 pub async fn build_embedder(config: &EmbedConfig) -> Result<Box<dyn Embedder>> {
     config.validate()?;
+    if !ai_providers::supports(&config.provider, Capability::Embed) {
+        bail!(
+            "provider '{}' is not a valid embedder; available embedders: {}",
+            config.provider,
+            ai_providers::names_with(Capability::Embed).join(", ")
+        );
+    }
     match config.provider.as_str() {
-        "voyage" => Ok(Box::new(voyage::VoyageEmbedder::new(config)?)),
-        "ollama" => Ok(Box::new(ollama::OllamaEmbedder::new(config).await?)),
-        "openai" => Ok(Box::new(openai::OpenAiEmbedder::new(config)?)),
+        "voyage" => Ok(Box::new(ai_providers::voyage::VoyageEmbedder::new(config)?)),
+        "ollama" => Ok(Box::new(
+            ai_providers::ollama::OllamaEmbedder::new(config).await?,
+        )),
+        "openai" => Ok(Box::new(ai_providers::openai::OpenAiEmbedder::new(config)?)),
         other => bail!("unknown embedder provider: '{other}'"),
     }
 }

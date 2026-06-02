@@ -1,18 +1,17 @@
-//! Anthropic Messages API adapter for [`Summarizer`].
+//! Anthropic Messages API adapter for [`Summarizer`](crate::summarize::Summarizer).
 //!
-//! Sends prompts from `prompts.rs` to Claude Haiku (default) via the
-//! Messages API. Includes bounded exponential-backoff retry for transient
-//! errors (429, 5xx).
-
-use std::time::Duration;
+//! Sends prompts from `summarize::prompts` to Claude Haiku (default) via the
+//! Messages API. Transient errors (429, 5xx) are retried with bounded
+//! exponential backoff via [`crate::http`].
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::prompts;
-use super::{FileSummaryInput, Summarizer, SymbolSummaryInput};
 use crate::config::SummarizerConfig;
+use crate::http::{self, RetryPolicy};
+use crate::summarize::prompts;
+use crate::summarize::{FileSummaryInput, Summarizer, SymbolSummaryInput};
 
 pub struct AnthropicSummarizer {
     client: reqwest::Client,
@@ -50,66 +49,27 @@ impl AnthropicSummarizer {
             ]
         });
 
-        let mut last_err = None;
-
-        for attempt in 0..=self.max_retries {
-            let result = self
-                .client
+        let policy = RetryPolicy::standard(self.max_retries, 1000);
+        let resp = http::send_with_retry(&policy, "Anthropic API", || {
+            self.client
                 .post(&url)
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .json(&body)
-                .send()
-                .await;
+        })
+        .await?;
 
-            let resp = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    if attempt < self.max_retries {
-                        let delay = backoff_delay(attempt);
-                        eprintln!(
-                            "warning: Anthropic API request failed (attempt {}): {e}, retrying in {delay:?}",
-                            attempt + 1
-                        );
-                        tokio::time::sleep(delay).await;
-                        last_err = Some(format!("{e}"));
-                        continue;
-                    }
-                    return Err(e).context("Anthropic API request failed");
-                }
-            };
-
-            let status = resp.status();
-            if status.is_success() {
-                let api_resp: ApiResponse = resp
-                    .json()
-                    .await
-                    .context("parsing Anthropic API response")?;
-                return extract_text(&api_resp);
-            }
-
-            if is_retryable(status.as_u16()) && attempt < self.max_retries {
-                let delay = backoff_delay(attempt);
-                let body_preview = resp.text().await.unwrap_or_default();
-                eprintln!(
-                    "warning: Anthropic API returned {status} (attempt {}): {}, retrying in {delay:?}",
-                    attempt + 1,
-                    body_preview.chars().take(200).collect::<String>()
-                );
-                tokio::time::sleep(delay).await;
-                last_err = Some(format!("{status}"));
-                continue;
-            }
-
-            let error_body = resp.text().await.unwrap_or_default();
-            bail!("Anthropic API error ({status}): {error_body}");
+        let status = resp.status();
+        if status.is_success() {
+            let api_resp: ApiResponse = resp
+                .json()
+                .await
+                .context("parsing Anthropic API response")?;
+            return extract_text(&api_resp);
         }
 
-        bail!(
-            "Anthropic API: max retries ({}) exceeded; last error: {}",
-            self.max_retries,
-            last_err.unwrap_or_else(|| "unknown".into())
-        )
+        let error_body = resp.text().await.unwrap_or_default();
+        bail!("Anthropic API error ({status}): {error_body}");
     }
 }
 
@@ -130,14 +90,6 @@ impl Summarizer for AnthropicSummarizer {
     }
 }
 
-fn backoff_delay(attempt: usize) -> Duration {
-    Duration::from_millis(1000 * 2u64.pow(attempt as u32))
-}
-
-fn is_retryable(status: u16) -> bool {
-    matches!(status, 429 | 500 | 502 | 503 | 529)
-}
-
 #[derive(Deserialize)]
 struct ApiResponse {
     content: Vec<ContentBlock>,
@@ -156,14 +108,6 @@ fn extract_text(response: &ApiResponse) -> Result<String> {
         .iter()
         .find_map(|block| block.text.clone())
         .context("Anthropic API response contained no text content")
-}
-
-/// Construct a [`Summarizer`] from the resolved config.
-pub fn build_summarizer(config: &SummarizerConfig) -> Result<Box<dyn Summarizer>> {
-    match config.provider.as_str() {
-        "anthropic" => Ok(Box::new(AnthropicSummarizer::new(config)?)),
-        other => bail!("summarizer provider '{other}' is not yet implemented"),
-    }
 }
 
 #[cfg(test)]
@@ -214,36 +158,6 @@ mod tests {
         assert_eq!(text, "The actual summary.");
     }
 
-    // ── Retry classification ──────────────────────────────────────────
-
-    #[test]
-    fn retryable_status_codes() {
-        assert!(is_retryable(429));
-        assert!(is_retryable(500));
-        assert!(is_retryable(502));
-        assert!(is_retryable(503));
-        assert!(is_retryable(529));
-    }
-
-    #[test]
-    fn non_retryable_status_codes() {
-        assert!(!is_retryable(200));
-        assert!(!is_retryable(400));
-        assert!(!is_retryable(401));
-        assert!(!is_retryable(403));
-        assert!(!is_retryable(404));
-    }
-
-    // ── Backoff timing ────────────────────────────────────────────────
-
-    #[test]
-    fn backoff_is_exponential() {
-        assert_eq!(backoff_delay(0), Duration::from_secs(1));
-        assert_eq!(backoff_delay(1), Duration::from_secs(2));
-        assert_eq!(backoff_delay(2), Duration::from_secs(4));
-        assert_eq!(backoff_delay(3), Duration::from_secs(8));
-    }
-
     // ── Request construction ──────────────────────────────────────────
 
     #[test]
@@ -279,43 +193,7 @@ mod tests {
         assert!(msg.contains("pay"));
     }
 
-    // ── Factory ───────────────────────────────────────────────────────
-
-    #[test]
-    fn build_summarizer_unknown_provider_errors() {
-        let config = SummarizerConfig {
-            provider: "openai".into(),
-            model: "gpt-4".into(),
-            api_key: "key".into(),
-        };
-        assert!(build_summarizer(&config).is_err());
-    }
-
-    #[test]
-    fn build_summarizer_anthropic_without_key_errors() {
-        let config = SummarizerConfig {
-            provider: "anthropic".into(),
-            model: "claude-haiku-4-5-20251001".into(),
-            api_key: String::new(),
-        };
-        match build_summarizer(&config) {
-            Ok(_) => panic!("should fail without API key"),
-            Err(e) => assert!(e.to_string().contains("ANTHROPIC_API_KEY")),
-        }
-    }
-
-    #[test]
-    fn build_summarizer_anthropic_with_key_succeeds() {
-        let config = SummarizerConfig {
-            provider: "anthropic".into(),
-            model: "claude-haiku-4-5-20251001".into(),
-            api_key: "test-key".into(),
-        };
-        let s = build_summarizer(&config).unwrap();
-        assert_eq!(s.model_name(), "claude-haiku-4-5-20251001");
-    }
-
-    // ── AnthropicSummarizer construction ──────────────────────────────
+    // ── Construction ──────────────────────────────────────────────────
 
     #[test]
     fn custom_base_url() {

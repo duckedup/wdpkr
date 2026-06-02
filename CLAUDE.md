@@ -2,7 +2,7 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
@@ -22,8 +22,6 @@ bd close <id>         # Complete work
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
 ## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
@@ -36,6 +34,7 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -96,15 +95,17 @@ src/
 ├── cli/          # Clap parsing + subcommand dispatch
 ├── config/       # 4-layer resolution: defaults → file → env → CLI flags
 ├── chunk/        # tree-sitter AST chunking (8 languages)
-├── summarize/    # Anthropic adapter + prompt templates + big-file rollup
-├── embed/        # Voyage / Ollama / OpenAI adapters
+├── ai_providers/ # All model-backend adapters: voyage/openai/ollama (embed) + anthropic (summarize) + capability registry
+├── http/         # Shared reqwest retry: RetryPolicy + send_with_retry (used by ai_providers + store)
+├── summarize/    # Summarizer trait + prompt templates + big-file rollup + build_summarizer factory
+├── embed/        # Embedder trait + build_embedder factory
 ├── store/        # VectorStore trait + Turbopuffer + DuckDB (local) adapters
 ├── search/       # Search orchestration + JSON/pretty output
 ├── indexer/      # Full pipeline: git diff → walk → chunk → summarize → embed → upsert
 └── testing/      # Mocks (store, embedder, summarizer) + fixtures
 ```
 
-All external API adapters share the same pattern: reqwest HTTP client, bounded exponential-backoff retry on 429/5xx, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
+Provider adapters live in one place (`ai_providers/`); the `embed` and `summarize` modules own their traits and a factory that consults `ai_providers::PROVIDERS` (a capability registry — `Embed`/`Summarize`) before dispatching. Voyage is embed-only by design. All HTTP adapters (AI providers and the Turbopuffer store) share `http::send_with_retry`: a reqwest client, bounded exponential-backoff retry on transient send errors and retryable statuses, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
 
 ## Conventions & Patterns
 
@@ -116,3 +117,51 @@ All external API adapters share the same pattern: reqwest HTTP client, bounded e
 - **Branch workflow**: one branch per issue or bundled epic, push for PR review
 - **Error handling**: `anyhow` at binary boundary, traits return `anyhow::Result`
 - **Async runtime**: `tokio` — `current_thread` for search (fast cold start), `multi_thread` for index
+
+### wdpkr
+
+This repo has a semantic codebase index via `wdpkr`. Use it to **locate feature areas by concept** — "where does commission logic live," "how is rate limiting implemented," "what does the PDF pipeline look like." Parse the JSON output; `path` and `summary` fields tell you where to look, then read the actual files.
+
+#### Options
+
+| Flag | Description |
+|------|-------------|
+| `--scope <path>` | Limit to subtree (repeatable: `--scope src/finance --scope src/annuity`) |
+| `--filter <glob>` | Glob on result paths (repeatable, OR logic: `--filter "*.go" --filter "*schedule*"`) |
+| `--terse` | Paths + one-sentence summaries, no symbols — minimal context cost |
+| `--no-symbols` | File-level results only, omit symbol nesting |
+| `-k, --top-k <N>` | Max file results (default 5). Use `-k 2` for precise hits |
+| `--symbols-per-file <N>` | Max symbols per file (default 3) |
+| `--pretty` | Human-readable colored output instead of JSON |
+
+#### Call graph data
+
+Symbol-level results include `calls` and `called_by` fields when the index has been built with call-graph support. Use these to assess blast radius before making changes:
+
+- `"calls": ["src/finance/rates.rs:lookup_rate_table"]` — this symbol calls `lookup_rate_table` in `src/finance/rates.rs`
+- `"called_by": ["src/api/handler.rs:process_request"]` — `process_request` depends on this symbol
+
+A `null` value means the symbol hasn't been indexed with call-graph data yet (run `wdpkr index --skip-summaries` to rebuild). An empty array `[]` means the symbol genuinely has no callers or callees.
+
+When changing a symbol, check its `called_by` to find all dependents — read those files to verify your change doesn't break callers. When exploring unfamiliar code, check `calls` to understand what a function depends on before diving into its implementation.
+
+#### When to use
+
+- **Conceptual questions** where you don't know what to grep for: "where does X live," "how is Y implemented"
+- **Orientation** before touching an unfamiliar area — get the lay of the land first
+- Combine `--scope` with `--filter` and `--terse` for fast, precise lookups:
+  `wdpkr search "rate table" --scope src/finance --filter "*.go" --terse -k 3`
+
+#### When NOT to use
+
+- You have a concrete symbol or string to find — use `rg`/grep instead
+- You already know which file to read — read it directly
+- You need exact text matches or regex — wdpkr is semantic, not lexical
+
+#### Best practices
+
+- **Scope aggressively.** If you know the layer, `--scope` is more valuable than refining the query. Unscoped searches return results across all layers (UI, backend, infra), wasting result slots on irrelevant files.
+- **Use `--terse` by default** for simple lookups. Full summaries and symbol trees are useful for deep exploration but waste context tokens when you just need to find the right file.
+- **Combine `--scope` with `--filter`** to narrow both the search space and the result set. `--scope` limits the vector query (efficient); `--filter` prunes results by filename pattern (flexible).
+- **Switch to `rg` after wdpkr points you somewhere.** Don't chain wdpkr queries to refine — once you have a file or symbol name, grep is faster.
+- **Run scoped queries in parallel** when a question spans layers — e.g., one `--scope src/graphql` and one `--scope src/finance`.

@@ -5,7 +5,6 @@
 //! `__wdpkr_meta__`.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -16,6 +15,7 @@ use super::{
     UpsertStats, VectorDocument, VectorStore,
 };
 use crate::config::StoreConfig;
+use crate::http::{self, RetryPolicy};
 
 const META_VECTOR_ID: &str = "__wdpkr_meta__";
 const MAX_RETRIES: usize = 3;
@@ -73,39 +73,14 @@ impl TurbopufferStore {
         format!("{}/v2/namespaces/{}", self.base_url, ns.as_str())
     }
 
+    /// POST with bounded retry on 5xx. Returns the response for any
+    /// success or client-error status; callers inspect and parse it.
     async fn post_json<T: Serialize>(&self, url: &str, body: &T) -> Result<reqwest::Response> {
-        for attempt in 0..=MAX_RETRIES {
-            let resp = self
-                .client
-                .post(url)
-                .bearer_auth(&self.api_key)
-                .json(body)
-                .send()
-                .await;
-
-            let resp = match resp {
-                Ok(r) => r,
-                Err(_) if attempt < MAX_RETRIES => {
-                    tokio::time::sleep(backoff(attempt)).await;
-                    continue;
-                }
-                Err(e) => return Err(e).context("Turbopuffer API request failed"),
-            };
-
-            let status = resp.status();
-            if status.is_success() || status.is_client_error() {
-                return Ok(resp);
-            }
-
-            if attempt < MAX_RETRIES {
-                tokio::time::sleep(backoff(attempt)).await;
-                continue;
-            }
-
-            let body = resp.text().await.unwrap_or_default();
-            bail!("Turbopuffer API error ({status}): {body}");
-        }
-        bail!("Turbopuffer API: max retries exceeded")
+        let policy = RetryPolicy::server_errors(MAX_RETRIES, 1000);
+        http::send_with_retry(&policy, "Turbopuffer API", || {
+            self.client.post(url).bearer_auth(&self.api_key).json(body)
+        })
+        .await
     }
 }
 
@@ -128,32 +103,20 @@ impl VectorStore for TurbopufferStore {
     }
 
     async fn delete_namespace(&self, ns: &Namespace) -> Result<()> {
-        for attempt in 0..=MAX_RETRIES {
-            let resp = self
-                .client
+        let policy = RetryPolicy::server_errors(MAX_RETRIES, 1000);
+        let resp = http::send_with_retry(&policy, "delete namespace", || {
+            self.client
                 .delete(self.ns_url(ns))
                 .bearer_auth(&self.api_key)
-                .send()
-                .await;
+        })
+        .await?;
 
-            match resp {
-                Ok(r) if r.status().is_success() || r.status().as_u16() == 404 => return Ok(()),
-                Ok(r) if r.status().is_server_error() && attempt < MAX_RETRIES => {
-                    tokio::time::sleep(backoff(attempt)).await;
-                    continue;
-                }
-                Ok(r) => {
-                    let body = r.text().await.unwrap_or_default();
-                    bail!("failed to delete namespace '{}': {body}", ns.as_str());
-                }
-                Err(_) if attempt < MAX_RETRIES => {
-                    tokio::time::sleep(backoff(attempt)).await;
-                    continue;
-                }
-                Err(e) => return Err(e).context("delete namespace request failed"),
-            }
+        let status = resp.status();
+        if status.is_success() || status.as_u16() == 404 {
+            return Ok(());
         }
-        bail!("delete namespace: max retries exceeded")
+        let body = resp.text().await.unwrap_or_default();
+        bail!("failed to delete namespace '{}': {body}", ns.as_str());
     }
 
     async fn namespace_exists(&self, ns: &Namespace) -> Result<bool> {
@@ -675,10 +638,6 @@ struct QueryRequest {
 struct QueryResponse {
     #[serde(default)]
     rows: Vec<HashMap<String, serde_json::Value>>,
-}
-
-fn backoff(attempt: usize) -> Duration {
-    Duration::from_millis(1000 * 2u64.pow(attempt as u32))
 }
 
 #[cfg(test)]
