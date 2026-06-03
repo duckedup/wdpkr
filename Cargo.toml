@@ -47,6 +47,7 @@ tree-sitter-java = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
 globset = "0.4"
+linear-mg = "0.2"
 
 [dev-dependencies]
 serial_test = "3"

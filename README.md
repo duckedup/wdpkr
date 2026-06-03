@@ -156,12 +156,40 @@ store:
 Search is exact (brute-force cosine) and requires no DuckDB extension. The DuckDB
 backend is compiled in by default; build with `--no-default-features` to exclude it.
 
+### Data sources (taps)
+
+wdpkr can index more than code. A **tap** is a data source; the default is `files`
+(your repo). Configure a `taps:` list to add others — e.g. **Linear** issues, so an
+agent can retrieve *why* a decision was made, not just the code that resulted:
+
+```yaml
+taps:
+  - name: files
+  - name: linear            # newest issues + comment threads
+    settings:
+      amount: 100
+      order_by: updatedAt
+```
+
+```bash
+export LINEAR_API_KEY=lin_api_...
+wdpkr index --tap linear                                   # index just Linear
+wdpkr search "why did we change the rate table" --provider linear
+```
+
+Non-`files` results carry a `source` field (`"source": "linear"`) and a
+scheme-prefixed `path` (`linear://ENG-123`). `--provider` scopes a search to chosen
+sources. See the [Taps guide](https://wdpkr.duckedup.org/guides/taps/) for the
+full reference.
+
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | `wdpkr search "<query>"` | Semantic search — returns tiered JSON |
+| `wdpkr search "<q>" --provider linear` | Scope search to specific tap sources |
 | `wdpkr index [--full]` | Index the codebase (full or incremental) |
+| `wdpkr index --tap linear` | Index only a configured tap (e.g. Linear) |
 | `wdpkr index --dry-run` | Estimate tokens and cost without API calls |
 | `wdpkr init` | Set up wdpkr for a repo (CLAUDE.md, .wdpkrignore, CI workflow) |
 | `wdpkr config init` | Interactive config setup |

@@ -27,3 +27,17 @@ indexer:
   concurrency: 8
   max_cost: 50
   hwm_success_threshold: 0.95
+
+# Data sources to index. Omit this block to index repository code only (the
+# default `files` tap). Each non-files tap is indexed into its own namespace
+# (`<namespace>--<tap>`) and tagged with a `source` field in search results.
+# taps:
+#   - name: files             # repository code (default when `taps` is omitted)
+#   - name: linear            # Linear issues — descriptions + comment threads
+#     settings:
+#       amount: 100           # ingest the newest N issues (default 50)
+#       order_by: updatedAt   # 'updatedAt' (default) or 'createdAt'
+#       # team: ENG           # optional team-key filter
+#       include_comments: true
+#       # api_key_env: LINEAR_API_KEY   # env var holding the key (default)
+#     # Set the key via env, not this file: export LINEAR_API_KEY=lin_api_...

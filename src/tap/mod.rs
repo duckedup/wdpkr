@@ -6,6 +6,7 @@
 //! JSON/stdio protocol through [`ProcessTap`](process::ProcessTap).
 
 pub mod files;
+pub mod linear;
 pub mod process;
 
 use std::collections::HashMap;
@@ -131,6 +132,9 @@ pub fn build_tap(
     }
     match cfg.name.as_str() {
         "files" => Ok(std::sync::Arc::new(files::FilesTap::new(root))),
+        "linear" => Ok(std::sync::Arc::new(linear::LinearTap::from_settings(
+            &cfg.settings,
+        )?)),
         other => anyhow::bail!(
             "unknown built-in tap '{other}'; \
              external taps must specify a 'command' field"

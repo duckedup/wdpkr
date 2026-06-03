@@ -129,6 +129,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn search_provider_defaults_empty() {
+        let cli = Cli::try_parse_from(["wdpkr", "search", "q"]).unwrap();
+        match cli.command {
+            Command::Search(args) => assert!(args.provider.is_empty()),
+            _ => panic!("expected Search"),
+        }
+    }
+
+    #[test]
+    fn search_parses_repeated_provider() {
+        let cli = Cli::try_parse_from([
+            "wdpkr",
+            "search",
+            "q",
+            "--provider",
+            "files",
+            "--provider",
+            "linear",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Search(args) => {
+                assert_eq!(
+                    args.provider,
+                    vec!["files".to_string(), "linear".to_string()]
+                );
+            }
+            _ => panic!("expected Search"),
+        }
+    }
+
     // ── index ─────────────────────────────────────────────────────────
 
     #[test]

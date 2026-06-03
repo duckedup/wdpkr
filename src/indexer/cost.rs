@@ -14,6 +14,7 @@ use crate::chunk::{Chunker, detect_language};
 use crate::summarize::prompts::{self, SYSTEM_PROMPT};
 use crate::summarize::rollup::estimate_tokens;
 use crate::summarize::{FileSummaryInput, SymbolSummaryInput};
+use crate::tap::SourceItem;
 
 #[derive(Debug, Clone)]
 pub struct DryRunReport {
@@ -21,11 +22,57 @@ pub struct DryRunReport {
     pub files_with_symbols: usize,
     pub total_symbols: usize,
     pub total_file_chunks: usize,
+    /// Linear issues contributing to the estimate (0 when the linear tap is
+    /// not configured or has no credentials).
+    pub linear_issues: usize,
     pub estimated_summarizer_input_tokens: usize,
     pub estimated_summarizer_output_tokens: usize,
     pub estimated_embed_tokens: usize,
     pub estimated_vectors: usize,
     pub estimated_cost_usd: f64,
+}
+
+/// Summarizer-input estimate for one document: the system prompt + file-level
+/// prompt, plus the system prompt + prompt for each symbol. Shared by the file
+/// walk and the Linear tap so both go through one estimation path.
+fn estimate_summary_input_tokens(
+    file_input: &FileSummaryInput,
+    symbols: &[SymbolSummaryInput],
+    system_prompt_tokens: usize,
+) -> usize {
+    let mut total = system_prompt_tokens + estimate_tokens(&prompts::file_user_message(file_input));
+    for sym in symbols {
+        total += system_prompt_tokens + estimate_tokens(&prompts::symbol_user_message(sym));
+    }
+    total
+}
+
+/// The Linear tap's contribution to a dry-run estimate: one file-level summary
+/// per issue (comments are folded into the issue's content, so there are no
+/// symbol sub-calls).
+#[derive(Debug, Clone, Default)]
+pub struct LinearEstimate {
+    pub issues: usize,
+    pub summarizer_input_tokens: usize,
+}
+
+/// Estimate the summarizer input for a set of Linear issue [`SourceItem`]s.
+pub fn estimate_linear(items: &[SourceItem]) -> LinearEstimate {
+    let system_prompt_tokens = estimate_tokens(SYSTEM_PROMPT);
+    let mut input = 0;
+    for item in items {
+        let file_input = FileSummaryInput {
+            file_path: item.source_path.clone(),
+            content: item.content.clone(),
+            imports: vec![],
+            language: item.language.clone().unwrap_or_else(|| "text".to_string()),
+        };
+        input += estimate_summary_input_tokens(&file_input, &[], system_prompt_tokens);
+    }
+    LinearEstimate {
+        issues: items.len(),
+        summarizer_input_tokens: input,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -92,34 +139,34 @@ pub fn dry_run(chunker: &dyn Chunker, root: &Path) -> Result<DryRunReport> {
         files_total += 1;
         total_chunks += 1;
 
-        // Build the actual file-level prompt and estimate tokens on that
         let file_input = FileSummaryInput {
             file_path: rel_path.to_string(),
             content: content.clone(),
             imports: chunks.imports.clone(),
             language: language.to_string(),
         };
-        let file_prompt = prompts::file_user_message(&file_input);
-        summarizer_input_tokens += system_prompt_tokens + estimate_tokens(&file_prompt);
+
+        let sym_inputs: Vec<SymbolSummaryInput> = chunks
+            .symbols
+            .iter()
+            .map(|sym| SymbolSummaryInput {
+                symbol_name: sym.name.clone(),
+                symbol_kind: sym.kind.clone(),
+                body: sym.body.clone(),
+                signature: sym.signature.clone(),
+                doc_comment: sym.doc_comment.clone(),
+                file_path: rel_path.to_string(),
+                file_summary: PLACEHOLDER_FILE_SUMMARY.to_string(),
+            })
+            .collect();
+
+        summarizer_input_tokens +=
+            estimate_summary_input_tokens(&file_input, &sym_inputs, system_prompt_tokens);
 
         if !chunks.symbols.is_empty() {
             files_with_symbols += 1;
             total_symbols += chunks.symbols.len();
             total_chunks += chunks.symbols.len();
-
-            for sym in &chunks.symbols {
-                let sym_input = SymbolSummaryInput {
-                    symbol_name: sym.name.clone(),
-                    symbol_kind: sym.kind.clone(),
-                    body: sym.body.clone(),
-                    signature: sym.signature.clone(),
-                    doc_comment: sym.doc_comment.clone(),
-                    file_path: rel_path.to_string(),
-                    file_summary: PLACEHOLDER_FILE_SUMMARY.to_string(),
-                };
-                let sym_prompt = prompts::symbol_user_message(&sym_input);
-                summarizer_input_tokens += system_prompt_tokens + estimate_tokens(&sym_prompt);
-            }
         }
     }
 
@@ -132,6 +179,7 @@ pub fn dry_run(chunker: &dyn Chunker, root: &Path) -> Result<DryRunReport> {
         files_with_symbols,
         total_symbols,
         total_file_chunks: total_chunks,
+        linear_issues: 0,
         estimated_summarizer_input_tokens: summarizer_input_tokens,
         estimated_summarizer_output_tokens: summarizer_output_tokens,
         estimated_embed_tokens: embed_tokens,
@@ -141,6 +189,16 @@ pub fn dry_run(chunker: &dyn Chunker, root: &Path) -> Result<DryRunReport> {
 }
 
 impl DryRunReport {
+    /// Fold a Linear estimate into the totals (one summary + one embed + one
+    /// vector per issue). Call before [`with_cost`](Self::with_cost).
+    pub fn merge_linear(&mut self, est: LinearEstimate) {
+        self.linear_issues = est.issues;
+        self.estimated_summarizer_input_tokens += est.summarizer_input_tokens;
+        self.estimated_summarizer_output_tokens += est.issues * ESTIMATED_SUMMARY_OUTPUT_TOKENS;
+        self.estimated_embed_tokens += est.issues * ESTIMATED_SUMMARY_OUTPUT_TOKENS;
+        self.estimated_vectors += est.issues;
+    }
+
     pub fn with_cost(mut self, rates: &ProviderRates) -> Self {
         let sum_input_cost = self.estimated_summarizer_input_tokens as f64 / 1_000_000.0
             * rates.summarizer_input_per_1m;
@@ -163,6 +221,13 @@ impl DryRunReport {
             self.files_with_symbols
                 .if_supports_color(Stream::Stdout, |s| s.cyan())
         );
+        if self.linear_issues > 0 {
+            println!(
+                "  Linear issues:      {}",
+                self.linear_issues
+                    .if_supports_color(Stream::Stdout, |s| s.cyan())
+            );
+        }
         println!(
             "  Total symbols:      {}",
             self.total_symbols
@@ -243,6 +308,7 @@ mod tests {
             files_with_symbols: 8,
             total_symbols: 50,
             total_file_chunks: 60,
+            linear_issues: 0,
             estimated_summarizer_input_tokens: 500_000,
             estimated_summarizer_output_tokens: 6_000,
             estimated_embed_tokens: 6_000,
@@ -260,6 +326,63 @@ mod tests {
             "cost: {}",
             with_cost.estimated_cost_usd
         );
+    }
+
+    #[test]
+    fn estimate_linear_counts_and_tokens() {
+        let items = vec![
+            SourceItem {
+                source_path: "linear://ENG-1".into(),
+                content: "ENG-1 Fix login\n\nUsers cannot log in after refresh.".into(),
+                content_hash: "h1".into(),
+                language: None,
+                module_doc: None,
+                children: vec![],
+            },
+            SourceItem {
+                source_path: "linear://ENG-2".into(),
+                content: "ENG-2 Rate table\n\nWhy we chose monthly buckets.".into(),
+                content_hash: "h2".into(),
+                language: None,
+                module_doc: None,
+                children: vec![],
+            },
+        ];
+        let est = estimate_linear(&items);
+        assert_eq!(est.issues, 2);
+        assert!(est.summarizer_input_tokens > 0);
+    }
+
+    #[test]
+    fn merge_linear_folds_into_totals() {
+        let mut report = DryRunReport {
+            files_total: 1,
+            files_with_symbols: 0,
+            total_symbols: 0,
+            total_file_chunks: 1,
+            linear_issues: 0,
+            estimated_summarizer_input_tokens: 1_000,
+            estimated_summarizer_output_tokens: 100,
+            estimated_embed_tokens: 100,
+            estimated_vectors: 1,
+            estimated_cost_usd: 0.0,
+        };
+        report.merge_linear(LinearEstimate {
+            issues: 3,
+            summarizer_input_tokens: 5_000,
+        });
+        assert_eq!(report.linear_issues, 3);
+        assert_eq!(report.estimated_summarizer_input_tokens, 6_000);
+        // 3 issues × ESTIMATED_SUMMARY_OUTPUT_TOKENS added to output + embed.
+        assert_eq!(
+            report.estimated_summarizer_output_tokens,
+            100 + 3 * ESTIMATED_SUMMARY_OUTPUT_TOKENS
+        );
+        assert_eq!(
+            report.estimated_embed_tokens,
+            100 + 3 * ESTIMATED_SUMMARY_OUTPUT_TOKENS
+        );
+        assert_eq!(report.estimated_vectors, 1 + 3);
     }
 
     #[test]

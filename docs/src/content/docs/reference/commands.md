@@ -38,8 +38,13 @@ wdpkr search "auth flow" --scope src/auth/ -k 10
 | `--no-symbols` | off | File-level results only, omit symbol nesting |
 | `--scope <path>` | — | Limit search to subtree(s); repeatable |
 | `--filter <glob>` | — | Glob filter on result paths; repeatable (OR logic) |
+| `--provider <name>` | all | Limit search to these tap sources (e.g. `files`, `linear`); repeatable |
 | `--terse` | off | Compact output: paths + one-sentence summaries |
 | `--pretty` | off | Human-readable output instead of JSON |
+
+Results from a non-`files` tap carry a `source` field (e.g. `"source": "linear"`)
+and a scheme-prefixed `path` (e.g. `linear://ENG-123`). See
+[Taps](/guides/taps/) for indexing data sources beyond code.
 
 ## `index`
 
@@ -50,6 +55,7 @@ vector store. Incremental by default — only changed files are reprocessed.
 wdpkr index              # incremental
 wdpkr index --full       # rebuild everything
 wdpkr index --dry-run    # estimate cost, no API calls
+wdpkr index --tap linear # index only the configured Linear tap
 ```
 
 | Flag | Default | Description |

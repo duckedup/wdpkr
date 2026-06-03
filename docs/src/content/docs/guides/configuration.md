@@ -115,6 +115,30 @@ prefer the nested `store.turbopuffer.api_key`.
 | `indexer.max_cost` | `50` | Hard cap (USD) on a single indexing run |
 | `indexer.hwm_success_threshold` | `0.95` | Min success rate to advance the indexed high-water mark |
 
+### Taps
+
+Data sources to index. Omit `taps` to index repository code only (the default
+`files` tap). Each entry has a `name` and optional per-tap `settings`. See
+[Taps](/guides/taps/) for the full Linear tap reference.
+
+```yaml
+taps:
+  - name: files
+  - name: linear
+    settings:
+      amount: 100
+      order_by: updatedAt
+      include_comments: true
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `taps[].name` | `files` | Tap name — `files` or `linear` |
+| `taps[].settings` | — | Per-tap settings (e.g. the Linear tap's `amount`, `order_by`, `team`, `include_comments`, `api_key_env`) |
+
+Set the Linear API key via the `LINEAR_API_KEY` environment variable, not the
+config file.
+
 ## Environment variables
 
 Every setting has a matching environment variable, which overrides the config
@@ -127,6 +151,7 @@ TURBOPUFFER_API_KEY            # vector storage (required for default store)
 VOYAGE_API_KEY                 # embedding (required for default provider)
 OPENAI_API_KEY                 # embedding (OpenAI provider)
 OLLAMA_HOST                    # embedding (Ollama provider)
+LINEAR_API_KEY                 # Linear tap (when the linear tap is configured)
 
 # Providers & models
 WDPKR_STORE_PROVIDER           # turbopuffer | duckdb

@@ -238,12 +238,34 @@ async fn run_skip_summaries(config: &Config) -> Result<()> {
 
 async fn run_dry_run(config: &Config) -> Result<()> {
     use crate::chunk::tree_sitter::TreeSitterChunker;
+    use crate::tap::{FetchContext, build_tap};
+    use std::collections::HashMap;
 
     let root = std::env::current_dir()?;
     let chunker = TreeSitterChunker::new();
 
     eprintln!("Scanning repository...");
-    let report = cost::dry_run(&chunker, &root)?;
+    let mut report = cost::dry_run(&chunker, &root)?;
+
+    // Fold in the Linear tap if it's configured. Fetching issue text is a free
+    // metadata read (no LLM/embed calls); if the API key is missing we skip the
+    // Linear estimate so --dry-run still works for code alone.
+    if let Some(tap_cfg) = config.taps.iter().find(|t| t.name == "linear") {
+        match build_tap(tap_cfg, root.clone()) {
+            Ok(tap) => {
+                eprintln!("Fetching Linear issues for estimate...");
+                let ctx = FetchContext {
+                    full: true,
+                    cursor: None,
+                    stored_hashes: HashMap::new(),
+                };
+                let result = tap.fetch(&ctx).await?;
+                report.merge_linear(cost::estimate_linear(&result.items));
+            }
+            Err(e) => eprintln!("Skipping Linear cost estimate: {e}"),
+        }
+    }
+
     let rates = ProviderRates::for_models(&config.summarizer.model, &config.embed.model);
     let report = report.with_cost(&rates);
 
