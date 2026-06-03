@@ -53,6 +53,7 @@ export default defineConfig({
             { label: "How it works", link: "/guides/how-it-works/" },
             { label: "Configuration", link: "/guides/configuration/" },
             { label: "Providers", link: "/guides/providers/" },
+            { label: "Taps", link: "/guides/taps/" },
             { label: "Storage", link: "/guides/storage/" },
           ],
         },
