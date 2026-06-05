@@ -41,8 +41,8 @@ pub(crate) mod test_helpers;
 pub use embed::{EmbedConfig, EmbedSources};
 pub use indexer::{IndexerConfig, IndexerSources};
 pub use store::{
-    DuckdbConfig, DuckdbSources, StoreConfig, StoreSources, TurbopufferConfig, TurbopufferSources,
-    default_duckdb_path,
+    NidusConfig, NidusSources, StoreConfig, StoreSources, TurbopufferConfig, TurbopufferSources,
+    default_nidus_path,
 };
 pub use summarizer::{SummarizerConfig, SummarizerSources};
 pub use tap::{FileTapConfig, TapConfig, TapsSources};
@@ -246,9 +246,9 @@ impl ResolvedConfig {
                 source: s.store.provider.clone(),
             },
             ConfigEntry {
-                key: "store.duckdb.path",
-                value: c.store.duckdb.path.clone(),
-                source: s.store.duckdb.path.clone(),
+                key: "store.nidus.path",
+                value: c.store.nidus.path.clone(),
+                source: s.store.nidus.path.clone(),
             },
             ConfigEntry {
                 key: "embedder.provider",
@@ -359,9 +359,9 @@ pub struct FileStoreConfig {
     /// Turbopuffer backend settings (`store.turbopuffer.*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turbopuffer: Option<FileTurbopufferConfig>,
-    /// DuckDB backend settings (`store.duckdb.*`).
+    /// nidus backend settings (`store.nidus.*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duckdb: Option<FileDuckdbConfig>,
+    pub nidus: Option<FileNidusConfig>,
     /// Deprecated flat alias for `store.turbopuffer.api_key`. Still read for
     /// backwards compatibility; prefer the nested form. Never written by
     /// `config set`/`init`.
@@ -376,7 +376,7 @@ pub struct FileTurbopufferConfig {
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
-pub struct FileDuckdbConfig {
+pub struct FileNidusConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
@@ -542,10 +542,10 @@ impl FileConfig {
                     .get_or_insert_default()
                     .api_key = Some(value.into());
             }
-            "store.duckdb.path" => {
+            "store.nidus.path" => {
                 self.store
                     .get_or_insert_default()
-                    .duckdb
+                    .nidus
                     .get_or_insert_default()
                     .path = Some(value.into());
             }
@@ -898,12 +898,12 @@ indexer:
     #[test]
     fn set_nested_store_keys() {
         let mut file = FileConfig::default();
-        file.set("store.duckdb.path", "/tmp/db.duckdb").unwrap();
+        file.set("store.nidus.path", "/tmp/nidus").unwrap();
         file.set("store.turbopuffer.api_key", "tp-key").unwrap();
         let store = file.store.as_ref().unwrap();
         assert_eq!(
-            store.duckdb.as_ref().unwrap().path.as_deref(),
-            Some("/tmp/db.duckdb")
+            store.nidus.as_ref().unwrap().path.as_deref(),
+            Some("/tmp/nidus")
         );
         assert_eq!(
             store.turbopuffer.as_ref().unwrap().api_key.as_deref(),

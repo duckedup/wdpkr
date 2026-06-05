@@ -2,17 +2,10 @@
 name = "wdpkr"
 version = "0.10.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96"
 description = "Codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
 repository = "https://github.com/duckedup/wdpkr"
 license = "MIT"
-
-[features]
-# DuckDB local store backend. On by default; compiles a bundled DuckDB from
-# source (C++ via the `cc` backend). Disable with `--no-default-features` for
-# pure-Rust builds (e.g. Miri, which cannot execute FFI).
-default = ["duckdb"]
-duckdb = ["dep:duckdb"]
 
 [lib]
 name = "wdpkr"
@@ -28,7 +21,7 @@ blake3 = "1"
 ignore = "0.4"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
-duckdb = { version = "1", features = ["bundled"], optional = true }
+nidus = "0.3"
 serde_json = "1"
 dirs = "6"
 owo-colors = { version = "4", features = ["supports-colors"] }

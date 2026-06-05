@@ -62,7 +62,7 @@ just release       # optimized release build
 just run <args>    # run from source (e.g. `just run search "query"`)
 ```
 
-Rust 1.95+ required (pinned via `rust-toolchain.toml`). Edition 2024.
+Rust 1.96+ required (pinned via `rust-toolchain.toml`). Edition 2024.
 
 ### Miri (Undefined Behavior Checker)
 
@@ -73,21 +73,20 @@ Rust 1.95+ required (pinned via `rust-toolchain.toml`). Edition 2024.
 - Calls tree-sitter (`Parser::new()`, `TreeSitterChunker`) — C library FFI
 - Spawns processes (`Command::new()`) — requires `fork()` syscall
 - Creates reqwest `Client` directly (not via mocks) — system TLS FFI
-- Touches the DuckDB store (`DuckdbStore`) — bundled C library FFI
 
-**Do NOT ignore** tests that use mock implementations (`MockEmbedder`, `MockVectorStore`, `MockSummarizer`) — these are pure Rust and should run under Miri.
+**Do NOT ignore** tests that use mock implementations (`MockEmbedder`, `MockVectorStore`, `MockSummarizer`) or the pure-Rust nidus store's conversion helpers — these run under Miri. (nidus's store *methods*, however, go through a tokio runtime, so those tests still need the tokio ignore above.)
 
-Miri runs `cargo miri test --no-default-features`: the DuckDB backend is behind a
-default-on `duckdb` cargo feature and compiles a bundled C++ library that Miri can
-neither execute nor usefully compile. Disabling the feature keeps Miri focused on
-pure-Rust code. Miri runs in CI as a separate job. If nightly breaks Miri temporarily,
-the CI job will fail but won't block the main `check` job.
+Miri runs `cargo miri test`: wdpkr is pure Rust (the local store is the
+pure-Rust `nidus` crate — no FFI, no bundled C/C++), so Miri builds the whole
+crate. Tests needing OS-level FFI carry `#[cfg_attr(miri, ignore)]`. Miri runs in
+CI as a separate job. If nightly breaks Miri temporarily, the CI job will fail but
+won't block the main `check` job.
 
 ## Architecture Overview
 
 wdpkr is a CLI tool that maintains a vector-search index of LLM-generated code summaries. Two commands:
 
-- `wdpkr index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to the configured store (Turbopuffer or local DuckDB)
+- `wdpkr index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to the configured store (Turbopuffer or local nidus)
 - `wdpkr search "<query>"` — embeds query, searches the configured store, returns tiered file+symbol JSON
 
 ```
@@ -99,13 +98,13 @@ src/
 ├── http/         # Shared reqwest retry: RetryPolicy + send_with_retry (used by ai_providers + store)
 ├── summarize/    # Summarizer trait + prompt templates + big-file rollup + build_summarizer factory
 ├── embed/        # Embedder trait + build_embedder factory
-├── store/        # VectorStore trait + Turbopuffer + DuckDB (local) adapters
+├── store/        # VectorStore trait + Turbopuffer + nidus (local) adapters
 ├── search/       # Search orchestration + JSON/pretty output
 ├── indexer/      # Full pipeline: git diff → walk → chunk → summarize → embed → upsert
 └── testing/      # Mocks (store, embedder, summarizer) + fixtures
 ```
 
-Provider adapters live in one place (`ai_providers/`); the `embed` and `summarize` modules own their traits and a factory that consults `ai_providers::PROVIDERS` (a capability registry — `Embed`/`Summarize`) before dispatching. Voyage is embed-only by design. All HTTP adapters (AI providers and the Turbopuffer store) share `http::send_with_retry`: a reqwest client, bounded exponential-backoff retry on transient send errors and retryable statuses, configurable base URL for testing. The DuckDB store is the exception — a local, file-backed backend (bundled DuckDB via FFI) behind the default-on `duckdb` cargo feature, wrapping a blocking connection in `Arc<Mutex<Connection>>` + `spawn_blocking`.
+Provider adapters live in one place (`ai_providers/`); the `embed` and `summarize` modules own their traits and a factory that consults `ai_providers::PROVIDERS` (a capability registry — `Embed`/`Summarize`) before dispatching. Voyage is embed-only by design. All HTTP adapters (AI providers and the Turbopuffer store) share `http::send_with_retry`: a reqwest client, bounded exponential-backoff retry on transient send errors and retryable statuses, configurable base URL for testing. The nidus store is the exception — a local, file-backed backend built on the pure-Rust [`nidus`](https://crates.io/crates/nidus) crate (no FFI, no bundled C/C++), wrapping a synchronous `Nidus` handle in `Arc<Mutex<_>>` + `spawn_blocking`.
 
 ## Conventions & Patterns
 

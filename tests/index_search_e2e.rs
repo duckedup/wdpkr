@@ -586,23 +586,22 @@ async fn json_output_is_valid_after_full_pipeline() {
     cleanup(&dir);
 }
 
-// ── Real DuckDB backend (no mock store) ───────────────────────────────────
-// Proves the full offline pipeline against a real, file-backed DuckDB store:
-// index with one connection, drop it, reopen the same file for search.
+// ── Real nidus backend (no mock store) ────────────────────────────────────
+// Proves the full offline pipeline against a real, file-backed nidus store:
+// index with one handle, drop it, reopen the same directory for search.
 
-#[cfg(feature = "duckdb")]
 #[cfg_attr(miri, ignore)]
 #[tokio::test]
-async fn full_pipeline_against_real_duckdb() {
-    use wdpkr::store::duckdb::DuckdbStore;
+async fn full_pipeline_against_real_nidus() {
+    use wdpkr::store::nidus::NidusStore;
 
-    let dir = create_fixture_repo("duckdb-backend");
-    let db_path = dir.join("wdpkr.duckdb");
+    let dir = create_fixture_repo("nidus-backend");
+    let db_path = dir.join("wdpkr-nidus");
     let db_path_str = db_path.to_str().unwrap().to_string();
-    let ns = Namespace::from("test-duckdb");
+    let ns = Namespace::from("test-nidus");
 
     // ── Index ──
-    let index_store = DuckdbStore::open(&db_path_str, 8).unwrap();
+    let index_store = NidusStore::open(&db_path_str, 8).unwrap();
     let taps: Vec<Arc<dyn Tap>> = vec![Arc::new(FilesTap::new(dir.clone()))];
     let index = IndexRun::new(
         taps,
@@ -614,15 +613,18 @@ async fn full_pipeline_against_real_duckdb() {
         EmbedMode::Summary,
     );
     let report = index.run(true).await.unwrap();
-    assert!(report.vectors_upserted > 0, "should upsert into DuckDB");
+    assert!(report.vectors_upserted > 0, "should upsert into nidus");
     assert_eq!(report.files_failed, 0);
 
-    // Drop the index store so its file lock is released before reopening.
+    // Drop the index store before reopening the same directory.
     drop(index);
-    assert!(db_path.exists(), "DuckDB file should be persisted to disk");
+    assert!(
+        db_path.exists(),
+        "nidus store dir should be persisted to disk"
+    );
 
-    // ── Search (fresh connection to the same file) ──
-    let search_store = DuckdbStore::open(&db_path_str, 8).unwrap();
+    // ── Search (fresh handle to the same directory) ──
+    let search_store = NidusStore::open(&db_path_str, 8).unwrap();
     let search = SearchRun::new(
         Box::new(MockEmbedder::new(8)),
         Box::new(search_store),
@@ -645,7 +647,7 @@ async fn full_pipeline_against_real_duckdb() {
     assert!(json["results"].is_array());
     assert!(
         !json["results"].as_array().unwrap().is_empty(),
-        "search over real DuckDB should return results"
+        "search over real nidus should return results"
     );
 
     cleanup(&dir);
