@@ -1,6 +1,6 @@
 [package]
 name = "wdpkr"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.96"
 description = "Codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
