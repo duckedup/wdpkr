@@ -803,9 +803,9 @@ dependencies = [
 
 [[package]]
 name = "nidus"
-version = "0.3.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03847505c7b8c5606af1f54cf9465f75fe88ac19e1d064f84109d331c17d8d85"
+checksum = "a96f8126420acb50f72dcb0180dace1c88d4c344e2f7d16d12fe9850194062e9"
 dependencies = [
  "anyhow",
  "bincode",
