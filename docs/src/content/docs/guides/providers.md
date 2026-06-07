@@ -12,7 +12,7 @@ production-ready.
 | --- | --- | --- | --- |
 | Summarizer | Anthropic Claude Haiku | — | `ANTHROPIC_API_KEY` |
 | Embedder | Voyage `voyage-code-3` | OpenAI, Ollama (local) | `VOYAGE_API_KEY` |
-| Vector store | Turbopuffer | DuckDB (local) | `TURBOPUFFER_API_KEY` |
+| Vector store | Turbopuffer | nidus (local, pure-Rust) | `TURBOPUFFER_API_KEY` |
 
 All adapters share one shape: a `reqwest` HTTP client, bounded
 exponential-backoff retry on 429/5xx, and a configurable base URL (which is how
@@ -70,7 +70,7 @@ nonsense.
 
 Holds the embedded summaries and serves cosine-similarity search. Two backends,
 selected by `store.provider`: hosted **Turbopuffer** (default) or local
-file-backed **DuckDB**.
+pure-Rust **nidus** (no FFI / no C toolchain).
 
 ```bash
 # hosted (default)
@@ -78,7 +78,7 @@ export TURBOPUFFER_API_KEY=...
 wdpkr config set store.provider turbopuffer
 
 # or local, no API key
-wdpkr config set store.provider duckdb
+wdpkr config set store.provider nidus
 ```
 
 See [Storage](/guides/storage/) for the full comparison and configuration of

@@ -8,8 +8,7 @@
 //! 1. Create a module implementing `VectorStore` + `StoreProvider`
 //! 2. Register one line in [`providers()`]
 
-#[cfg(feature = "duckdb")]
-pub mod duckdb;
+pub mod nidus;
 pub mod turbopuffer;
 
 use std::collections::HashMap;
@@ -31,12 +30,10 @@ pub trait StoreProvider: Send + Sync {
 // ── Provider registry ────────────────────────────────────────────────────
 
 fn providers() -> Vec<Box<dyn StoreProvider>> {
-    #[allow(unused_mut)]
-    let mut providers: Vec<Box<dyn StoreProvider>> =
-        vec![Box::new(turbopuffer::TurbopufferProvider)];
-    #[cfg(feature = "duckdb")]
-    providers.push(Box::new(duckdb::DuckdbProvider));
-    providers
+    vec![
+        Box::new(turbopuffer::TurbopufferProvider),
+        Box::new(nidus::NidusProvider),
+    ]
 }
 
 pub fn resolve_provider(name: &str) -> Result<Box<dyn StoreProvider>> {
@@ -435,7 +432,7 @@ mod tests {
             turbopuffer: crate::config::TurbopufferConfig {
                 api_key: "key".into(),
             },
-            duckdb: crate::config::DuckdbConfig {
+            nidus: crate::config::NidusConfig {
                 path: ":memory:".into(),
             },
         }

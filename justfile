@@ -50,10 +50,11 @@ test-mod MOD:
     cargo test --all-features {{ MOD }}
 
 # Run Miri to check for undefined behavior (requires nightly).
-# --no-default-features drops the DuckDB backend (bundled C library FFI that
-# Miri cannot execute).
+# wdpkr is now pure Rust (no FFI), so Miri builds the whole crate. Tests that
+# need OS-level FFI (tokio reactor, tree-sitter, subprocesses) carry
+# #[cfg_attr(miri, ignore)]; pure-Rust tests run.
 miri:
-    MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks" cargo +nightly miri test --no-default-features
+    MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks" cargo +nightly miri test
 
 # Pre-commit / pre-PR checks: format clean, no clippy warnings, tests green
 ci: fmt-check lint test

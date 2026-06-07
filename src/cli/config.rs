@@ -60,7 +60,7 @@ async fn run_init() -> Result<()> {
     // ── Vector store ──
     let store_provider = prompt_choice(
         "Vector store provider",
-        &["turbopuffer", "duckdb"],
+        &["turbopuffer", "nidus"],
         "turbopuffer",
     )?;
     let turbopuffer_key = if store_provider == "turbopuffer" {
@@ -68,10 +68,10 @@ async fn run_init() -> Result<()> {
     } else {
         String::new()
     };
-    let duckdb_path = if store_provider == "duckdb" {
+    let nidus_path = if store_provider == "nidus" {
         prompt_freetext(
-            "DuckDB database path",
-            &crate::config::default_duckdb_path(),
+            "nidus store directory",
+            &crate::config::default_nidus_path(),
         )?
     } else {
         String::new()
@@ -133,8 +133,8 @@ async fn run_init() -> Result<()> {
                     api_key: Some(api_key),
                 }
             }),
-            duckdb: non_empty(duckdb_path)
-                .map(|path| crate::config::FileDuckdbConfig { path: Some(path) }),
+            nidus: non_empty(nidus_path)
+                .map(|path| crate::config::FileNidusConfig { path: Some(path) }),
             ..Default::default()
         }),
         embedder: Some(crate::config::FileEmbedConfig {

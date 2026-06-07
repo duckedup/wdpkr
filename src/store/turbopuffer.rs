@@ -643,7 +643,7 @@ struct QueryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DuckdbConfig, TurbopufferConfig};
+    use crate::config::{NidusConfig, TurbopufferConfig};
 
     /// Build a turbopuffer `StoreConfig` with the given API key.
     fn tp_config(api_key: &str) -> StoreConfig {
@@ -652,7 +652,7 @@ mod tests {
             turbopuffer: TurbopufferConfig {
                 api_key: api_key.into(),
             },
-            duckdb: DuckdbConfig {
+            nidus: NidusConfig {
                 path: ":memory:".into(),
             },
         }

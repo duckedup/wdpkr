@@ -44,8 +44,8 @@ store:
   # Provider-specific settings live in nested blocks:
   # turbopuffer:
   #   api_key: ...                # prefer the TURBOPUFFER_API_KEY env var
-  # duckdb:                        # local, file-backed store (provider: duckdb)
-  #   path: ~/.local/share/wdpkr/wdpkr.duckdb   # or WDPKR_DUCKDB_PATH env var
+  # nidus:                         # local, file-backed, pure-Rust store (provider: nidus)
+  #   path: ~/.local/share/wdpkr/nidus          # store directory; or WDPKR_NIDUS_PATH env var
 
 embedder:
   provider: voyage
@@ -77,9 +77,9 @@ or shared file are a liability.
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `store.provider` | `turbopuffer` | Vector store backend — `turbopuffer` or `duckdb` |
+| `store.provider` | `turbopuffer` | Vector store backend — `turbopuffer` or `nidus` |
 | `store.turbopuffer.api_key` | — | Turbopuffer API key (prefer the env var) |
-| `store.duckdb.path` | `~/.local/share/wdpkr/wdpkr.duckdb` | DuckDB database file (local backend) |
+| `store.nidus.path` | `~/.local/share/wdpkr/nidus` | nidus store directory (local backend) |
 
 See [Storage](/guides/storage/) for the trade-offs between backends. The flat
 `store.turbopuffer_api_key` key is still read for backwards compatibility, but
@@ -154,8 +154,8 @@ OLLAMA_HOST                    # embedding (Ollama provider)
 LINEAR_API_KEY                 # Linear tap (when the linear tap is configured)
 
 # Providers & models
-WDPKR_STORE_PROVIDER           # turbopuffer | duckdb
-WDPKR_DUCKDB_PATH              # DuckDB database file (duckdb store)
+WDPKR_STORE_PROVIDER           # turbopuffer | nidus
+WDPKR_NIDUS_PATH               # nidus store directory (nidus store)
 WDPKR_EMBED_PROVIDER           # voyage | openai | ollama
 WDPKR_EMBED_MODEL
 WDPKR_EMBED_BATCH_SIZE

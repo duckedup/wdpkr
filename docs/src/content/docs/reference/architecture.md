@@ -3,7 +3,7 @@ title: Architecture
 description: How the wdpkr codebase is organized and the conventions that hold it together.
 ---
 
-wdpkr is a Rust CLI (Edition 2024, Rust 1.95+) that maintains a vector-search
+wdpkr is a Rust CLI (Edition 2024, Rust 1.96+) that maintains a vector-search
 index of LLM-generated code summaries. This page maps the source tree and the
 patterns that recur across it.
 

@@ -9,7 +9,7 @@ use super::{FileConfig, Resolved, Source, env_or_resolved, file_or_resolved};
 pub struct StoreConfig {
     pub provider: String,
     pub turbopuffer: TurbopufferConfig,
-    pub duckdb: DuckdbConfig,
+    pub nidus: NidusConfig,
 }
 
 /// Turbopuffer backend settings.
@@ -17,9 +17,9 @@ pub struct TurbopufferConfig {
     pub api_key: String,
 }
 
-/// DuckDB (local, file-backed) backend settings.
-pub struct DuckdbConfig {
-    /// Path to the on-disk DuckDB database file.
+/// nidus (local, file-backed, pure-Rust) backend settings.
+pub struct NidusConfig {
+    /// Path to the on-disk nidus store **directory**.
     pub path: String,
 }
 
@@ -35,7 +35,7 @@ impl StoreConfig {
 pub struct StoreSources {
     pub provider: Source,
     pub turbopuffer: TurbopufferSources,
-    pub duckdb: DuckdbSources,
+    pub nidus: NidusSources,
 }
 
 #[derive(Debug, Clone)]
@@ -44,14 +44,14 @@ pub struct TurbopufferSources {
 }
 
 #[derive(Debug, Clone)]
-pub struct DuckdbSources {
+pub struct NidusSources {
     pub path: Source,
 }
 
-/// Default DuckDB database path: `$XDG_DATA_HOME/wdpkr/wdpkr.duckdb`, falling
-/// back to `~/.local/share/wdpkr/wdpkr.duckdb`. Mirrors the uniform-XDG
-/// approach used for the config file path (see [`super::FileConfig::path`]).
-pub fn default_duckdb_path() -> String {
+/// Default nidus store directory: `$XDG_DATA_HOME/wdpkr/nidus`, falling back to
+/// `~/.local/share/wdpkr/nidus`. Mirrors the uniform-XDG approach used for the
+/// config file path (see [`super::FileConfig::path`]).
+pub fn default_nidus_path() -> String {
     let base = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         PathBuf::from(xdg)
     } else if let Some(home) = dirs::home_dir() {
@@ -60,7 +60,7 @@ pub fn default_duckdb_path() -> String {
         PathBuf::from(".")
     };
     base.join("wdpkr")
-        .join("wdpkr.duckdb")
+        .join("nidus")
         .to_string_lossy()
         .into_owned()
 }
@@ -90,11 +90,11 @@ impl StoreConfig {
             file_or_resolved(tpuf_file_key, String::new()),
         );
 
-        let duckdb_path: Resolved<String> = env_or_resolved(
-            "WDPKR_DUCKDB_PATH",
+        let nidus_path: Resolved<String> = env_or_resolved(
+            "WDPKR_NIDUS_PATH",
             file_or_resolved(
-                f.and_then(|s| s.duckdb.as_ref().and_then(|d| d.path.clone())),
-                default_duckdb_path(),
+                f.and_then(|s| s.nidus.as_ref().and_then(|d| d.path.clone())),
+                default_nidus_path(),
             ),
         );
 
@@ -104,8 +104,8 @@ impl StoreConfig {
                 turbopuffer: TurbopufferConfig {
                     api_key: api_key.value,
                 },
-                duckdb: DuckdbConfig {
-                    path: duckdb_path.value,
+                nidus: NidusConfig {
+                    path: nidus_path.value,
                 },
             },
             StoreSources {
@@ -113,8 +113,8 @@ impl StoreConfig {
                 turbopuffer: TurbopufferSources {
                     api_key: api_key.source,
                 },
-                duckdb: DuckdbSources {
-                    path: duckdb_path.source,
+                nidus: NidusSources {
+                    path: nidus_path.source,
                 },
             },
         )
@@ -125,14 +125,14 @@ impl StoreConfig {
 mod tests {
     use super::*;
     use crate::config::test_helpers::{remove_envs, set_env};
-    use crate::config::{FileDuckdbConfig, FileStoreConfig, FileTurbopufferConfig};
+    use crate::config::{FileNidusConfig, FileStoreConfig, FileTurbopufferConfig};
     use serial_test::serial;
 
     fn clear_env() {
         remove_envs(&[
             "WDPKR_STORE_PROVIDER",
             "TURBOPUFFER_API_KEY",
-            "WDPKR_DUCKDB_PATH",
+            "WDPKR_NIDUS_PATH",
             "XDG_DATA_HOME",
         ]);
     }
@@ -144,8 +144,8 @@ mod tests {
             turbopuffer: TurbopufferConfig {
                 api_key: api_key.into(),
             },
-            duckdb: DuckdbConfig {
-                path: "/tmp/wdpkr-test.duckdb".into(),
+            nidus: NidusConfig {
+                path: "/tmp/wdpkr-test-nidus".into(),
             },
         }
     }
@@ -157,7 +157,7 @@ mod tests {
         let cfg = StoreConfig::from_env(&None);
         assert_eq!(cfg.provider, "turbopuffer");
         assert_eq!(cfg.turbopuffer.api_key, "");
-        assert!(cfg.duckdb.path.ends_with("wdpkr/wdpkr.duckdb"));
+        assert!(cfg.nidus.path.ends_with("wdpkr/nidus"));
     }
 
     #[test]
@@ -264,43 +264,43 @@ mod tests {
         assert_eq!(cfg.turbopuffer.api_key, "nested-key");
     }
 
-    // ── DuckDB path ────────────────────────────────────────────────────
+    // ── nidus path ─────────────────────────────────────────────────────
 
     #[test]
     #[serial]
-    fn duckdb_path_default_honors_xdg_data_home() {
+    fn nidus_path_default_honors_xdg_data_home() {
         clear_env();
         set_env("XDG_DATA_HOME", "/tmp/wdpkr-xdg-data");
         let cfg = StoreConfig::from_env(&None);
-        assert_eq!(cfg.duckdb.path, "/tmp/wdpkr-xdg-data/wdpkr/wdpkr.duckdb");
+        assert_eq!(cfg.nidus.path, "/tmp/wdpkr-xdg-data/wdpkr/nidus");
         clear_env();
     }
 
     #[test]
     #[serial]
-    fn duckdb_path_env_override() {
+    fn nidus_path_env_override() {
         clear_env();
-        set_env("WDPKR_DUCKDB_PATH", "/custom/db.duckdb");
+        set_env("WDPKR_NIDUS_PATH", "/custom/nidus");
         let cfg = StoreConfig::from_env(&None);
-        assert_eq!(cfg.duckdb.path, "/custom/db.duckdb");
+        assert_eq!(cfg.nidus.path, "/custom/nidus");
         clear_env();
     }
 
     #[test]
     #[serial]
-    fn duckdb_path_from_file() {
+    fn nidus_path_from_file() {
         clear_env();
         let file = FileConfig {
             store: Some(FileStoreConfig {
-                duckdb: Some(FileDuckdbConfig {
-                    path: Some("/file/db.duckdb".into()),
+                nidus: Some(FileNidusConfig {
+                    path: Some("/file/nidus".into()),
                 }),
                 ..Default::default()
             }),
             ..Default::default()
         };
         let cfg = StoreConfig::from_env(&Some(file));
-        assert_eq!(cfg.duckdb.path, "/file/db.duckdb");
+        assert_eq!(cfg.nidus.path, "/file/nidus");
     }
 
     // ── Source attribution ────────────────────────────────────────────
@@ -312,7 +312,7 @@ mod tests {
         let (_, sources) = StoreConfig::resolve(&None);
         assert_eq!(sources.provider, Source::Default);
         assert_eq!(sources.turbopuffer.api_key, Source::Default);
-        assert_eq!(sources.duckdb.path, Source::Default);
+        assert_eq!(sources.nidus.path, Source::Default);
     }
 
     #[test]
@@ -336,14 +336,14 @@ mod tests {
         clear_env();
         set_env("WDPKR_STORE_PROVIDER", "qdrant");
         set_env("TURBOPUFFER_API_KEY", "key");
-        set_env("WDPKR_DUCKDB_PATH", "/x.duckdb");
+        set_env("WDPKR_NIDUS_PATH", "/x-nidus");
         let (_, sources) = StoreConfig::resolve(&None);
         assert_eq!(sources.provider, Source::Env("WDPKR_STORE_PROVIDER"));
         assert_eq!(
             sources.turbopuffer.api_key,
             Source::Env("TURBOPUFFER_API_KEY")
         );
-        assert_eq!(sources.duckdb.path, Source::Env("WDPKR_DUCKDB_PATH"));
+        assert_eq!(sources.nidus.path, Source::Env("WDPKR_NIDUS_PATH"));
         clear_env();
     }
 
@@ -367,8 +367,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "duckdb")]
-    fn validate_passes_duckdb_with_path() {
-        assert!(cfg("duckdb", "").validate().is_ok());
+    fn validate_passes_nidus_with_path() {
+        assert!(cfg("nidus", "").validate().is_ok());
     }
 }

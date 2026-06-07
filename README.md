@@ -115,7 +115,7 @@ wdpkr uses three external services. Each is trait-swappable — the defaults are
 |---|---|---|---|
 | **Summarizer** | Anthropic Claude Haiku | — | `ANTHROPIC_API_KEY` |
 | **Embedder** | Voyage `voyage-code-3` | OpenAI, Ollama (local) | `VOYAGE_API_KEY` |
-| **Vector store** | Turbopuffer | DuckDB (local) | `TURBOPUFFER_API_KEY` |
+| **Vector store** | Turbopuffer | nidus (local, pure-Rust) | `TURBOPUFFER_API_KEY` |
 
 ### Environment variables
 
@@ -124,21 +124,21 @@ ANTHROPIC_API_KEY          # summarization (required)
 TURBOPUFFER_API_KEY        # vector storage (required for the default store)
 VOYAGE_API_KEY             # embedding (required for default provider)
 WDPKR_EMBED_PROVIDER       # voyage | ollama | openai
-WDPKR_STORE_PROVIDER       # turbopuffer | duckdb
-WDPKR_DUCKDB_PATH          # DuckDB database file (store.provider=duckdb)
+WDPKR_STORE_PROVIDER       # turbopuffer | nidus
+WDPKR_NIDUS_PATH           # nidus store directory (store.provider=nidus)
 WDPKR_NAMESPACE            # override auto-derived namespace
 ```
 
 All settings can also be set in `~/.config/wdpkr/config.yaml` via `wdpkr config set`.
 
-### Local vector store (DuckDB)
+### Local vector store (nidus)
 
-For a fully local setup with no hosted vector database, use the DuckDB backend — a
-single embedded file, no API key:
+For a fully local setup with no hosted vector database, use the [nidus](https://crates.io/crates/nidus)
+backend — a pure-Rust embeddable store (no API key, **no FFI / no C toolchain**):
 
 ```bash
-wdpkr config set store.provider duckdb
-wdpkr config set store.duckdb.path ~/.local/share/wdpkr/wdpkr.duckdb   # optional; this is the default
+wdpkr config set store.provider nidus
+wdpkr config set store.nidus.path ~/.local/share/wdpkr/nidus   # optional; this is the default
 ```
 
 Pair it with the Ollama embedder (`WDPKR_EMBED_PROVIDER=ollama`) to keep embeddings
@@ -146,15 +146,15 @@ local too. Provider-specific store settings are nested per backend in the config
 
 ```yaml
 store:
-  provider: duckdb
+  provider: nidus
   turbopuffer:
     api_key: ...           # or TURBOPUFFER_API_KEY
-  duckdb:
-    path: ~/.local/share/wdpkr/wdpkr.duckdb   # or WDPKR_DUCKDB_PATH
+  nidus:
+    path: ~/.local/share/wdpkr/nidus   # store directory; or WDPKR_NIDUS_PATH
 ```
 
-Search is exact (brute-force cosine) and requires no DuckDB extension. The DuckDB
-backend is compiled in by default; build with `--no-default-features` to exclude it.
+Search is exact (brute-force cosine), and because nidus is pure Rust, wdpkr builds
+and links with no C/C++ toolchain — which is what lets it be vendored cleanly.
 
 ### Data sources (taps)
 
@@ -211,12 +211,12 @@ Each case reports **recall@k**, **MRR** (rank of the first relevant file),
 **symbol recall**, and a **compression ratio** (result tokens ÷ tokens of the
 files you'd otherwise read). A `By tag` breakdown slices the suite by query style.
 
-### Results — docstring mode, local DuckDB
+### Results — docstring mode, local nidus
 
 The numbers below are the `wdpkr-deep` suite (32 cases) run against wdpkr's own
 codebase, indexed in **`--docstring` mode** (embeds code documentation +
 signatures, **no LLM summaries**) with **`voyage-code-3`** into a local
-**DuckDB** store.
+**nidus** store.
 
 | Metric | Value |
 |---|---|

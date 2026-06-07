@@ -1,38 +1,45 @@
 # Store adapter rules
 
-## DuckDB (local backend)
+## nidus (local backend)
 
-Local, file-backed store behind the default-on `duckdb` cargo feature
-(`src/store/duckdb.rs`). Selected with `store.provider = duckdb`. Goal: run wdpkr
-with no hosted third party.
+Local, file-backed store (`src/store/nidus.rs`), selected with
+`store.provider = nidus`. Goal: run wdpkr with no hosted third party **and no
+FFI** — [`nidus`](https://crates.io/crates/nidus) is a pure-Rust embeddable
+vector store, so the whole binary builds/links without a C/C++ toolchain. This
+is what replaced the former bundled-DuckDB backend and lets the internal product
+vendor wdpkr cleanly.
 
-- **One file, namespace = column.** A single DuckDB file holds every namespace in a
-  shared `documents` table keyed by `(namespace, id)`, plus a `namespaces` metadata
-  table and a `wdpkr_meta` row. `delete_namespace` is a `DELETE WHERE namespace = ?` —
-  no dynamic DDL.
-- **Exact brute-force search, no extension.** Vectors live in a fixed-size
-  `FLOAT[dim]` ARRAY ranked by the **core** `array_cosine_distance` function — the
-  `vss` extension is NOT required. Score mirrors Turbopuffer: `score = 1 - dist`
-  (cosine similarity), so `min_score` and the output layer are identical across
-  backends.
-- **HNSW-ready, deferred.** Because the query is
-  `... ORDER BY array_cosine_distance(...) LIMIT k` over a fixed-size ARRAY, adding an
-  HNSW index later is a pure additive `CREATE INDEX ... USING HNSW` — no query or
-  schema change. It is deliberately NOT done yet: the `vss` extension is not
-  Cargo-bundleable (must vendor a version-matched binary), its persistent index needs
-  an experimental flag with data-loss risk, is reloaded into RAM per process, and goes
-  stale on delete.
-- **Avoid driver ARRAY/LIST/MAP binding.** Only the `vector` column uses an ARRAY: it
-  is written as an inlined numeric literal (`[..]::FLOAT[dim]`, numbers only →
-  injection-safe) and read back via `CAST(vector AS VARCHAR)`. `calls`/`called_by`/
-  metadata `extra` are JSON text; `NULL` distinguishes `None` from `Some(vec![])`.
-- **One dimension per file.** `wdpkr_meta` pins the embedding dimension; reopening with
-  a different dimension is a hard error. Use a separate `duckdb_path` or reindex.
-- **Blocking driver.** The `duckdb` crate is synchronous; every `VectorStore` method
-  runs its SQL inside `spawn_blocking`, locking the `Arc<Mutex<Connection>>` only inside
-  the closure (never across `.await`).
-- **Tests** use an in-memory connection and carry `#[cfg_attr(miri, ignore)]` (FFI). Miri
-  runs `--no-default-features`, so this module is absent there.
+- **One directory, namespace = collection.** A single nidus directory holds every
+  namespace; the wdpkr `Namespace` maps to a nidus collection (isolated id space).
+  `delete_namespace` → `drop_collection`; create/exists → `create_collection`/
+  `has_collection`. All ops are idempotent-guarded with `has_collection`.
+- **Exact brute-force cosine.** nidus's only search mode. `Hit::score` is already
+  cosine similarity, matching Turbopuffer's `score = 1 - distance`, so `min_score`
+  and the output layer are identical across backends — no score transform.
+- **Attributes are typed `Value`s, not SQL.** A `VectorDocument`'s fields become a
+  `Record`'s `attrs` map: `Value::Str` (strings), `Value::Int` (line numbers),
+  `Value::List` (calls/called_by). Optional fields are **omitted** from `attrs` when
+  `None`; this is what preserves the not-indexed (`None`) vs empty (`Some(vec![])`)
+  call-graph distinction — an absent key reads back `None`, a `List([])` reads back
+  `Some(vec![])`. Namespace metadata (hwm_sha/embedder/extra) lives in nidus's
+  per-collection `get_meta`/`set_meta` string map; `extra` is JSON-encoded.
+- **AND-only filters; OR via merged searches.** nidus `Filter` is a conjunction of
+  `Predicate`s. `chunk_kind`/`language` push down as `Predicate::Eq`; a single path
+  prefix as `Predicate::Glob("file_path", "{prefix}*")`. nidus glob `*` **crosses
+  `/`** (verified by test), matching DuckDB GLOB / Turbopuffer Glob, so a scope
+  matches nested files. Multiple prefixes (OR semantics) can't be one filter, so
+  they run as separate searches merged by id (best score), sorted, truncated to
+  `top_k`.
+- **One dimension per directory.** The dimension is fixed at open via
+  `nidus::Config`; reopening a directory with a different dimension is a hard error
+  (verified by test). Use a separate `store.nidus.path` or reindex.
+- **Synchronous, `&mut` for writes.** nidus is sync and its writes need `&mut`, so
+  the store wraps one `Nidus` in `Arc<Mutex<_>>` and runs every method inside
+  `spawn_blocking`, locking only inside the closure (never across `.await`). Each
+  mutating op `flush()`es so a reopened directory sees the data.
+- **Tests.** The conversion helpers (`to_record`/`record_to_doc`/meta map) are pure
+  Rust and Miri-safe. The store tests use a tokio runtime (reactor FFI) so they
+  carry `#[cfg_attr(miri, ignore)]` — nidus itself is pure Rust.
 
 ## Turbopuffer: v2 API only
 

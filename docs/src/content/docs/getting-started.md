@@ -24,7 +24,7 @@ cargo install --path .
 ```
 
 :::note
-wdpkr requires Rust 1.95+ (Edition 2024). The toolchain is pinned via
+wdpkr requires Rust 1.96+ (Edition 2024). The toolchain is pinned via
 `rust-toolchain.toml` when building from source.
 :::
 

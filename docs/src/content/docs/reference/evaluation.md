@@ -65,7 +65,7 @@ adds per-case `relevance`, `symbol_relevance`, and a `by_tag` array.
 The numbers below are the `wdpkr-deep` suite (32 cases) run against wdpkr's own
 codebase, indexed in **`--docstring` mode** — embeddings come from code
 documentation + signatures with **no LLM summaries** — using **`voyage-code-3`**
-into a local **DuckDB** store.
+into a local **nidus** store.
 
 | Metric | Value |
 |---|---|
