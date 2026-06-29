@@ -405,7 +405,7 @@ fn to_record(doc: &VectorDocument) -> Record {
     }
     Record {
         id: doc.id.clone(),
-        vector: doc.vector.clone(),
+        vector: Some(doc.vector.clone()),
         attrs,
     }
 }
@@ -413,7 +413,7 @@ fn to_record(doc: &VectorDocument) -> Record {
 fn record_to_doc(r: Record) -> VectorDocument {
     VectorDocument {
         id: r.id,
-        vector: r.vector,
+        vector: r.vector.unwrap_or_default(),
         summary: attr_str(&r.attrs, "summary").unwrap_or_default(),
         file_path: attr_str(&r.attrs, "file_path").unwrap_or_default(),
         chunk_kind: attr_str(&r.attrs, "chunk_kind")
