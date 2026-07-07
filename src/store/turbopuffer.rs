@@ -185,10 +185,22 @@ impl VectorStore for TurbopufferStore {
     }
 
     async fn upsert(&self, ns: &Namespace, docs: &[VectorDocument]) -> Result<UpsertStats> {
+        // Turbopuffer rejects any batch containing duplicate document IDs. IDs
+        // are content-derived, so a duplicate ID means duplicate content —
+        // collapse to the last occurrence and warn instead of failing the run.
+        let (deduped, dup_ids) = dedupe_by_id(docs);
+        if !dup_ids.is_empty() {
+            eprintln!(
+                "warning: skipped {} duplicate document ID(s) before upsert: {}",
+                dup_ids.len(),
+                dup_ids.join(", ")
+            );
+        }
+
         let mut upserted = 0;
-        for chunk in docs.chunks(UPSERT_BATCH_SIZE) {
+        for chunk in deduped.chunks(UPSERT_BATCH_SIZE) {
             let rows: Vec<HashMap<String, serde_json::Value>> =
-                chunk.iter().map(doc_to_row).collect();
+                chunk.iter().copied().map(doc_to_row).collect();
             let body = WriteRequest {
                 upsert_rows: Some(rows),
                 distance_metric: Some("cosine_distance".into()),
@@ -203,7 +215,7 @@ impl VectorStore for TurbopufferStore {
         }
         Ok(UpsertStats {
             upserted,
-            skipped: 0,
+            skipped: dup_ids.len(),
         })
     }
 
@@ -435,6 +447,29 @@ fn score_and_filter_rows(
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────
+
+/// Drop documents with duplicate IDs, keeping the last occurrence of each (at
+/// its last position). Turbopuffer rejects an upsert batch outright if it
+/// contains duplicate IDs; content-derived IDs mean a duplicate ID is duplicate
+/// content, so last-wins is a safe collapse. Order within a batch does not
+/// affect the upsert. Returns the kept documents plus the list of IDs that
+/// appeared more than once.
+fn dedupe_by_id(docs: &[VectorDocument]) -> (Vec<&VectorDocument>, Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    let mut kept = Vec::with_capacity(docs.len());
+    let mut dup_ids = Vec::new();
+    // Walk in reverse so the last occurrence of each ID wins, then restore order.
+    for doc in docs.iter().rev() {
+        if seen.insert(doc.id.as_str()) {
+            kept.push(doc);
+        } else {
+            dup_ids.push(doc.id.clone());
+        }
+    }
+    kept.reverse();
+    dup_ids.reverse();
+    (kept, dup_ids)
+}
 
 fn doc_to_row(doc: &VectorDocument) -> HashMap<String, serde_json::Value> {
     let mut row = HashMap::new();
@@ -1246,6 +1281,73 @@ mod tests {
         assert_eq!(back.extra.len(), 2);
         assert_eq!(back.extra["version"], "2");
         assert_eq!(back.extra["created_by"], "wdpkr");
+    }
+
+    // ── dedupe_by_id ─────────────────────────────────────────────────
+
+    fn doc_with_id(id: &str, summary: &str) -> VectorDocument {
+        VectorDocument {
+            id: id.into(),
+            vector: vec![0.1],
+            summary: summary.into(),
+            file_path: "src/main.rs".into(),
+            chunk_kind: ChunkKind::Symbol,
+            symbol_name: Some("dup".into()),
+            symbol_kind: Some("function".into()),
+            start_line: None,
+            end_line: None,
+            language: Some("rust".into()),
+            content_hash: None,
+            calls: None,
+            called_by: None,
+        }
+    }
+
+    #[test]
+    fn dedupe_no_duplicates_keeps_all_in_order() {
+        let docs = vec![doc_with_id("a", "1"), doc_with_id("b", "2")];
+        let (kept, dups) = dedupe_by_id(&docs);
+        assert!(dups.is_empty());
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].id, "a");
+        assert_eq!(kept[1].id, "b");
+    }
+
+    #[test]
+    fn dedupe_keeps_last_occurrence_and_reports_dup() {
+        let docs = vec![
+            doc_with_id("a", "first-a"),
+            doc_with_id("b", "b"),
+            doc_with_id("a", "second-a"),
+        ];
+        let (kept, dups) = dedupe_by_id(&docs);
+        assert_eq!(dups, vec!["a".to_string()]);
+        assert_eq!(kept.len(), 2);
+        // Last-wins: the kept "a" carries the later content.
+        let a = kept.iter().find(|d| d.id == "a").unwrap();
+        assert_eq!(a.summary, "second-a");
+        assert!(kept.iter().any(|d| d.id == "b"));
+    }
+
+    #[test]
+    fn dedupe_multiple_repeats_of_same_id() {
+        let docs = vec![
+            doc_with_id("x", "1"),
+            doc_with_id("x", "2"),
+            doc_with_id("x", "3"),
+        ];
+        let (kept, dups) = dedupe_by_id(&docs);
+        // Two extras dropped, both reported.
+        assert_eq!(dups, vec!["x".to_string(), "x".to_string()]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].summary, "3");
+    }
+
+    #[test]
+    fn dedupe_empty_input() {
+        let (kept, dups) = dedupe_by_id(&[]);
+        assert!(kept.is_empty());
+        assert!(dups.is_empty());
     }
 
     // ── doc_to_row completeness ──────────────────────────────────────
