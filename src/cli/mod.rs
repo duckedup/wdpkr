@@ -130,33 +130,33 @@ mod tests {
     }
 
     #[test]
-    fn search_provider_defaults_empty() {
+    fn search_tap_defaults_empty() {
         let cli = Cli::try_parse_from(["wdpkr", "search", "q"]).unwrap();
         match cli.command {
-            Command::Search(args) => assert!(args.provider.is_empty()),
+            Command::Search(args) => assert!(args.tap.is_empty()),
             _ => panic!("expected Search"),
         }
     }
 
     #[test]
-    fn search_parses_repeated_provider() {
-        let cli = Cli::try_parse_from([
-            "wdpkr",
-            "search",
-            "q",
-            "--provider",
-            "files",
-            "--provider",
-            "linear",
-        ])
-        .unwrap();
+    fn search_parses_repeated_tap() {
+        let cli =
+            Cli::try_parse_from(["wdpkr", "search", "q", "--tap", "files", "--tap", "linear"])
+                .unwrap();
         match cli.command {
             Command::Search(args) => {
-                assert_eq!(
-                    args.provider,
-                    vec!["files".to_string(), "linear".to_string()]
-                );
+                assert_eq!(args.tap, vec!["files".to_string(), "linear".to_string()]);
             }
+            _ => panic!("expected Search"),
+        }
+    }
+
+    #[test]
+    fn search_provider_alias_still_works() {
+        // `--provider` is a deprecated hidden alias for `--tap`.
+        let cli = Cli::try_parse_from(["wdpkr", "search", "q", "--provider", "notion"]).unwrap();
+        match cli.command {
+            Command::Search(args) => assert_eq!(args.tap, vec!["notion".to_string()]),
             _ => panic!("expected Search"),
         }
     }
@@ -230,6 +230,34 @@ mod tests {
     #[test]
     fn index_tap_with_no_value_errors() {
         assert!(Cli::try_parse_from(["wdpkr", "index", "--tap"]).is_err());
+    }
+
+    #[test]
+    fn index_parses_repeated_doc() {
+        let cli = Cli::try_parse_from([
+            "wdpkr",
+            "index",
+            "--tap",
+            "notion",
+            "--doc",
+            "https://app.notion.com/p/Spec-399cb3ca",
+            "--doc",
+            "7a2b9f",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Index(args) => {
+                assert_eq!(args.tap.as_deref(), Some("notion"));
+                assert_eq!(
+                    args.doc,
+                    vec![
+                        "https://app.notion.com/p/Spec-399cb3ca".to_string(),
+                        "7a2b9f".to_string()
+                    ]
+                );
+            }
+            _ => panic!("expected Index"),
+        }
     }
 
     // ── config ────────────────────────────────────────────────────────

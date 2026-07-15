@@ -7,6 +7,7 @@
 
 pub mod files;
 pub mod linear;
+pub mod notion;
 pub mod process;
 
 use std::collections::HashMap;
@@ -115,12 +116,16 @@ pub fn namespace_suffix(tap_name: &str) -> Option<String> {
     }
 }
 
-/// Build a [] from a [`TapConfig`]. Built-in taps are
+/// Build a [`Tap`] from a [`TapConfig`]. Built-in taps are
 /// constructed directly; taps with a `command` field spawn a
 /// subprocess via [`ProcessTap`](process::ProcessTap).
+///
+/// `targets` carries the run's `--doc` values (page IDs / URLs). Only the
+/// notion tap consumes them; other taps ignore them.
 pub fn build_tap(
     cfg: &crate::config::TapConfig,
     root: std::path::PathBuf,
+    targets: &[String],
 ) -> Result<std::sync::Arc<dyn Tap>> {
     if let Some(ref command) = cfg.command {
         return Ok(std::sync::Arc::new(process::ProcessTap::new(
@@ -135,6 +140,10 @@ pub fn build_tap(
         "linear" => Ok(std::sync::Arc::new(linear::LinearTap::from_settings(
             &cfg.settings,
         )?)),
+        "notion" => Ok(std::sync::Arc::new(notion::NotionTap::from_settings(
+            &cfg.settings,
+            targets.to_vec(),
+        )?)),
         other => anyhow::bail!(
             "unknown built-in tap '{other}'; \
              external taps must specify a 'command' field"
@@ -143,11 +152,12 @@ pub fn build_tap(
 }
 
 /// Build all taps from config, optionally filtering to a single
-/// tap by name.
+/// tap by name. `targets` carries the run's `--doc` values.
 pub fn build_taps(
     configs: &[crate::config::TapConfig],
     root: std::path::PathBuf,
     only: Option<&str>,
+    targets: &[String],
 ) -> Result<Vec<std::sync::Arc<dyn Tap>>> {
     let filtered: Vec<_> = match only {
         Some(name) => {
@@ -169,7 +179,7 @@ pub fn build_taps(
     };
     filtered
         .into_iter()
-        .map(|cfg| build_tap(cfg, root.clone()))
+        .map(|cfg| build_tap(cfg, root.clone(), targets))
         .collect()
 }
 
@@ -370,7 +380,7 @@ mod tests {
     #[test]
     fn build_tap_files() {
         let cfg = files_config();
-        let tap = build_tap(&cfg, std::path::PathBuf::from(".")).unwrap();
+        let tap = build_tap(&cfg, std::path::PathBuf::from("."), &[]).unwrap();
         assert_eq!(tap.name(), "files");
     }
 
@@ -382,7 +392,7 @@ mod tests {
             args: vec![],
             settings: HashMap::new(),
         };
-        let result = build_tap(&cfg, std::path::PathBuf::from("."));
+        let result = build_tap(&cfg, std::path::PathBuf::from("."), &[]);
         let err = result.err().expect("should error");
         assert!(
             err.to_string().contains("unknown built-in tap"),
@@ -398,14 +408,14 @@ mod tests {
             args: vec!["--flag".into()],
             settings: HashMap::new(),
         };
-        let tap = build_tap(&cfg, std::path::PathBuf::from(".")).unwrap();
+        let tap = build_tap(&cfg, std::path::PathBuf::from("."), &[]).unwrap();
         assert_eq!(tap.name(), "custom");
     }
 
     #[test]
     fn build_taps_all() {
         let configs = vec![files_config()];
-        let taps = build_taps(&configs, std::path::PathBuf::from("."), None).unwrap();
+        let taps = build_taps(&configs, std::path::PathBuf::from("."), None, &[]).unwrap();
         assert_eq!(taps.len(), 1);
         assert_eq!(taps[0].name(), "files");
     }
@@ -413,14 +423,14 @@ mod tests {
     #[test]
     fn build_taps_filter_by_name() {
         let configs = vec![files_config()];
-        let taps = build_taps(&configs, std::path::PathBuf::from("."), Some("files")).unwrap();
+        let taps = build_taps(&configs, std::path::PathBuf::from("."), Some("files"), &[]).unwrap();
         assert_eq!(taps.len(), 1);
     }
 
     #[test]
     fn build_taps_filter_missing_errors() {
         let configs = vec![files_config()];
-        let result = build_taps(&configs, std::path::PathBuf::from("."), Some("linear"));
+        let result = build_taps(&configs, std::path::PathBuf::from("."), Some("linear"), &[]);
         let err = result.err().expect("should error");
         assert!(err.to_string().contains("not configured"), "got: {err}");
     }

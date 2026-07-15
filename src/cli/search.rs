@@ -34,10 +34,11 @@ pub struct SearchArgs {
     #[arg(long, action = clap::ArgAction::Append)]
     pub filter: Vec<String>,
 
-    /// Limit search to these tap sources (e.g. `files`, `linear`); repeatable.
-    /// Default: search all configured taps.
-    #[arg(long, action = clap::ArgAction::Append)]
-    pub provider: Vec<String>,
+    /// Limit search to these tap sources (e.g. `files`, `linear`, `notion`);
+    /// repeatable. Default: search all configured taps. `--provider` is a
+    /// deprecated hidden alias.
+    #[arg(long = "tap", alias = "provider", action = clap::ArgAction::Append)]
+    pub tap: Vec<String>,
 
     /// Compact output: paths + one-sentence summaries, no symbols
     #[arg(long)]
@@ -66,7 +67,7 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         filters: args.filter.clone(),
     };
 
-    let selected_taps = select_taps(&config.taps, &args.provider)?;
+    let selected_taps = select_taps(&config.taps, &args.tap)?;
     let namespaces: Vec<(Namespace, Option<String>)> = selected_taps
         .iter()
         .map(|p| {
@@ -95,19 +96,19 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     Ok(())
 }
 
-/// Filter configured taps to those named in `--provider`. An empty `providers`
-/// selects all taps. Errors on an unknown provider name, listing what's
+/// Filter configured taps to those named in `--tap`. An empty `names`
+/// selects all taps. Errors on an unknown tap name, listing what's
 /// configured.
-fn select_taps<'a>(taps: &'a [TapConfig], providers: &[String]) -> Result<Vec<&'a TapConfig>> {
-    if providers.is_empty() {
+fn select_taps<'a>(taps: &'a [TapConfig], names: &[String]) -> Result<Vec<&'a TapConfig>> {
+    if names.is_empty() {
         return Ok(taps.iter().collect());
     }
     let mut selected = Vec::new();
-    for name in providers {
+    for name in names {
         match taps.iter().find(|t| &t.name == name) {
             Some(t) => selected.push(t),
             None => bail!(
-                "unknown --provider '{name}'; configured taps: {}",
+                "unknown --tap '{name}'; configured taps: {}",
                 taps.iter()
                     .map(|t| t.name.as_str())
                     .collect::<Vec<_>>()
@@ -155,7 +156,7 @@ mod tests {
             no_symbols: true,
             scope: vec!["src/finance/".into()],
             filter: vec![],
-            provider: vec![],
+            tap: vec![],
             terse: false,
             pretty: false,
         };
@@ -227,7 +228,7 @@ mod tests {
             no_symbols: false,
             scope: vec![],
             filter: vec![],
-            provider: vec![],
+            tap: vec![],
             terse: false,
             pretty: false,
         };
@@ -240,7 +241,7 @@ mod tests {
         std::fs::remove_dir_all(&cfg_home).ok();
     }
 
-    // ── select_taps (provider filter) ─────────────────────────────────
+    // ── select_taps (--tap filter) ────────────────────────────────────
 
     fn taps(names: &[&str]) -> Vec<TapConfig> {
         names
@@ -255,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn select_taps_empty_provider_selects_all() {
+    fn select_taps_empty_selects_all() {
         let configured = taps(&["files", "linear"]);
         let selected = select_taps(&configured, &[]).unwrap();
         assert_eq!(selected.len(), 2);
@@ -270,11 +271,11 @@ mod tests {
     }
 
     #[test]
-    fn select_taps_unknown_provider_errors() {
+    fn select_taps_unknown_tap_errors() {
         let configured = taps(&["files", "linear"]);
         let err = select_taps(&configured, &["notion".into()]).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("unknown --provider 'notion'"), "got: {msg}");
+        assert!(msg.contains("unknown --tap 'notion'"), "got: {msg}");
         assert!(
             msg.contains("files") && msg.contains("linear"),
             "got: {msg}"

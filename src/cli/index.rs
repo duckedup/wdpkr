@@ -51,6 +51,13 @@ pub struct IndexArgs {
     /// Run only this configured tap (default: all)
     #[arg(long)]
     pub tap: Option<String>,
+
+    /// Target document(s) to index for a targeted tap, as a page ID or URL
+    /// (repeatable). Used by the notion tap: `--tap notion --doc <id-or-url>`.
+    /// Additive — only the named documents are (re)indexed. Ignored by taps
+    /// that don't support targeting (files, linear).
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub doc: Vec<String>,
 }
 
 pub async fn run(args: IndexArgs) -> Result<()> {
@@ -100,7 +107,7 @@ pub async fn run(args: IndexArgs) -> Result<()> {
     );
 
     let root = std::env::current_dir()?;
-    let taps = build_taps(&config.taps, root, args.tap.as_deref())?;
+    let taps = build_taps(&config.taps, root, args.tap.as_deref(), &args.doc)?;
     let index_run = IndexRun::new(
         taps,
         summarizer,
@@ -251,7 +258,7 @@ async fn run_dry_run(config: &Config) -> Result<()> {
     // metadata read (no LLM/embed calls); if the API key is missing we skip the
     // Linear estimate so --dry-run still works for code alone.
     if let Some(tap_cfg) = config.taps.iter().find(|t| t.name == "linear") {
-        match build_tap(tap_cfg, root.clone()) {
+        match build_tap(tap_cfg, root.clone(), &[]) {
             Ok(tap) => {
                 eprintln!("Fetching Linear issues for estimate...");
                 let ctx = FetchContext {
