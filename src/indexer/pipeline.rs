@@ -7,6 +7,10 @@ use anyhow::{Result, bail};
 use crate::chunk::SymbolChunk;
 use crate::embed::Embedder;
 use crate::indexer::docstring::{file_toc_text, symbol_embed_text};
+use crate::indexer::prose::{
+    has_code_structure, prose_doc_summary, prose_doc_text, prose_section_summary,
+    prose_section_text,
+};
 use crate::store::{ChunkKind, VectorDocument};
 use crate::summarize::rollup::{DEFAULT_TOKEN_THRESHOLD, summarize_file_and_symbols};
 use crate::summarize::{FileSummaryInput, Summarizer};
@@ -64,75 +68,109 @@ pub async fn process_item(
     let language = item.language.as_deref().unwrap_or("unknown");
     let symbol_count = item.children.len();
 
-    // Determine the embed text for the file and each symbol (aligned to
-    // `item.children` by index), plus how long summarization took.
+    // Determine, for the file and each child, the text to embed and the concise
+    // summary to store/display (they differ only for prose, where we embed the
+    // full text but store a short summary). Plus how long summarization took.
     let t1 = Instant::now();
-    let (file_text, symbol_texts) = match mode {
-        EmbedMode::Summary => {
-            let summarizer = match summarizer {
-                Some(s) => s,
-                None => bail!("summary embed mode requires a summarizer"),
-            };
-            let symbols: Vec<SymbolChunk> = item
-                .children
-                .iter()
-                .map(|c| SymbolChunk {
-                    name: c.name.clone(),
-                    kind: c.kind.clone(),
-                    body: c.content.clone(),
-                    signature: c.signature.clone(),
-                    doc_comment: c.doc_comment.clone(),
-                    start_line: c.start_line.unwrap_or(0),
-                    end_line: c.end_line.unwrap_or(0),
-                    references: c.references.clone(),
-                })
-                .collect();
-            let file_input = FileSummaryInput {
-                file_path: item.source_path.clone(),
-                content: item.content.clone(),
-                imports: vec![],
-                language: language.to_string(),
-            };
-            let summary_result = summarize_file_and_symbols(
-                summarizer,
-                &file_input,
-                &symbols,
-                DEFAULT_TOKEN_THRESHOLD,
-            )
-            .await?;
-            let symbol_texts = summary_result
-                .symbol_summaries
-                .into_iter()
-                .map(|s| s.summary)
-                .collect::<Vec<_>>();
-            (summary_result.file_summary, symbol_texts)
-        }
-        EmbedMode::Docstring => {
-            let file_text = file_toc_text(
-                &item.source_path,
-                item.module_doc.as_deref(),
-                &item.children,
-            );
-            let symbol_texts = item
-                .children
-                .iter()
-                .map(|c| {
-                    symbol_embed_text(c.doc_comment.as_deref(), c.signature.as_deref(), &c.name)
-                })
-                .collect::<Vec<_>>();
-            (file_text, symbol_texts)
-        }
-    };
+    #[allow(clippy::type_complexity)]
+    let (file_embed, file_summary, symbol_pairs): (String, String, Vec<(String, String)>) =
+        match mode {
+            EmbedMode::Summary => {
+                let summarizer = match summarizer {
+                    Some(s) => s,
+                    None => bail!("summary embed mode requires a summarizer"),
+                };
+                let symbols: Vec<SymbolChunk> = item
+                    .children
+                    .iter()
+                    .map(|c| SymbolChunk {
+                        name: c.name.clone(),
+                        kind: c.kind.clone(),
+                        body: c.content.clone(),
+                        signature: c.signature.clone(),
+                        doc_comment: c.doc_comment.clone(),
+                        start_line: c.start_line.unwrap_or(0),
+                        end_line: c.end_line.unwrap_or(0),
+                        references: c.references.clone(),
+                    })
+                    .collect();
+                let file_input = FileSummaryInput {
+                    file_path: item.source_path.clone(),
+                    content: item.content.clone(),
+                    imports: vec![],
+                    language: language.to_string(),
+                };
+                let summary_result = summarize_file_and_symbols(
+                    summarizer,
+                    &file_input,
+                    &symbols,
+                    DEFAULT_TOKEN_THRESHOLD,
+                )
+                .await?;
+                // Summary/docstring modes embed and display the same text.
+                let symbol_pairs = summary_result
+                    .symbol_summaries
+                    .into_iter()
+                    .map(|s| (s.summary.clone(), s.summary))
+                    .collect::<Vec<_>>();
+                (
+                    summary_result.file_summary.clone(),
+                    summary_result.file_summary,
+                    symbol_pairs,
+                )
+            }
+            EmbedMode::Docstring => {
+                // Code items embed a docstring/signature TOC; prose items (notion,
+                // linear, repo markdown) have no such metadata, so they embed their
+                // raw text directly — still no LLM in the loop.
+                if has_code_structure(item.module_doc.as_deref(), &item.children) {
+                    let file_text = file_toc_text(
+                        &item.source_path,
+                        item.module_doc.as_deref(),
+                        &item.children,
+                    );
+                    let symbol_pairs = item
+                        .children
+                        .iter()
+                        .map(|c| {
+                            let t = symbol_embed_text(
+                                c.doc_comment.as_deref(),
+                                c.signature.as_deref(),
+                                &c.name,
+                            );
+                            (t.clone(), t)
+                        })
+                        .collect::<Vec<_>>();
+                    (file_text.clone(), file_text, symbol_pairs)
+                } else {
+                    // Prose: embed the full text, but store a concise summary so
+                    // search output shows the scored sections, not the whole doc.
+                    let file_embed = prose_doc_text(&item.content);
+                    let file_summary = prose_doc_summary(&item.content);
+                    let symbol_pairs = item
+                        .children
+                        .iter()
+                        .map(|c| {
+                            (
+                                prose_section_text(&c.name, &c.content),
+                                prose_section_summary(&c.name, &c.content),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    (file_embed, file_summary, symbol_pairs)
+                }
+            }
+        };
     let summarize_time = t1.elapsed();
 
     let t2 = Instant::now();
     let mut documents = Vec::new();
 
-    let file_embedding = embedder.embed(&file_text).await?;
+    let file_embedding = embedder.embed(&file_embed).await?;
     documents.push(VectorDocument {
         id: document_id(&item.source_path, ChunkKind::File, None, &item.content),
         vector: file_embedding,
-        summary: file_text,
+        summary: file_summary,
         file_path: item.source_path.clone(),
         chunk_kind: ChunkKind::File,
         symbol_name: None,
@@ -145,8 +183,8 @@ pub async fn process_item(
         called_by: None,
     });
 
-    for (child, text) in item.children.iter().zip(symbol_texts) {
-        let embedding = embedder.embed(&text).await?;
+    for (child, (embed_text, summary)) in item.children.iter().zip(symbol_pairs) {
+        let embedding = embedder.embed(&embed_text).await?;
         documents.push(VectorDocument {
             id: document_id(
                 &item.source_path,
@@ -155,7 +193,7 @@ pub async fn process_item(
                 &child.content,
             ),
             vector: embedding,
-            summary: text,
+            summary,
             file_path: item.source_path.clone(),
             chunk_kind: ChunkKind::Symbol,
             symbol_name: Some(child.name.clone()),
@@ -382,6 +420,60 @@ mod tests {
             assert!(!doc.summary.is_empty(), "embed text must be non-empty");
             assert_eq!(doc.vector.len(), 8);
         }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn process_item_docstring_mode_prose_embeds_content() {
+        // A notion-like prose item (no language, sections without signatures)
+        // must embed its raw prose, not just headings.
+        let embedder = MockEmbedder::new(8);
+        let item = SourceItem {
+            source_path: "notion://abc".into(),
+            content: "# Widget Spec\n\n## Cooling\nThe widget vents heat through the top fins."
+                .into(),
+            content_hash: "h".into(),
+            language: None,
+            module_doc: None,
+            children: vec![SourceChunk {
+                name: "Cooling".into(),
+                kind: "section".into(),
+                content: "The widget vents heat through the top fins.".into(),
+                signature: None,
+                doc_comment: None,
+                start_line: None,
+                end_line: None,
+                references: vec![],
+            }],
+        };
+
+        let result = process_item(&item, None, &embedder, EmbedMode::Docstring)
+            .await
+            .unwrap();
+
+        let file_doc = result
+            .documents
+            .iter()
+            .find(|d| d.chunk_kind == ChunkKind::File)
+            .unwrap();
+        // File vector embeds the doc prose (title + body), not a heading list.
+        assert!(
+            file_doc.summary.contains("Widget Spec"),
+            "{}",
+            file_doc.summary
+        );
+
+        let section = result
+            .documents
+            .iter()
+            .find(|d| d.chunk_kind == ChunkKind::Symbol)
+            .unwrap();
+        // Section vector embeds the section CONTENT, not just its heading.
+        assert!(
+            section.summary.contains("vents heat through the top fins"),
+            "section embedded only its heading: {}",
+            section.summary
+        );
     }
 
     #[cfg_attr(miri, ignore)]

@@ -4,6 +4,10 @@
 //! documentation, with no summarizer in the loop. They are total functions:
 //! a symbol with no docstring and no signature still yields a non-empty
 //! string (its name), so indexing never fails on undocumented code.
+//!
+//! Prose document taps (notion, linear) use [`super::prose`] instead — in
+//! docstring mode their natural no-LLM embed text is the raw prose, not a
+//! code TOC.
 
 use crate::tap::SourceChunk;
 
