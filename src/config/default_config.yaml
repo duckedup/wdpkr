@@ -41,3 +41,12 @@ indexer:
 #       include_comments: true
 #       # api_key_env: LINEAR_API_KEY   # env var holding the key (default)
 #     # Set the key via env, not this file: export LINEAR_API_KEY=lin_api_...
+#   - name: notion           # Notion pages (implementation specs), indexed
+#                            # on demand: wdpkr index --tap notion --doc <id-or-url>
+#     settings:
+#       include_sections: true          # per-heading section children (default)
+#       # notion_version: "2026-03-11"  # Notion-Version header (default)
+#       # api_key_env: NOTION_API_KEY   # env var holding the integration token
+#     # Set the token via env, not this file: export NOTION_API_KEY=secret_...
+#     # Share each page with your Notion integration so the API can read it.
+#     # Remove a stale spec: wdpkr delete --tap notion "notion://<id>*"

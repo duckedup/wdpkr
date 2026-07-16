@@ -127,7 +127,7 @@ This repo has a semantic codebase index via `wdpkr`. Use it to **locate feature 
 |------|-------------|
 | `--scope <path>` | Limit to subtree (repeatable: `--scope src/finance --scope src/annuity`) |
 | `--filter <glob>` | Glob on result paths (repeatable, OR logic: `--filter "*.go" --filter "*schedule*"`) |
-| `--provider <name>` | Limit to tap sources (repeatable: `files`, `linear`). Default: all configured taps |
+| `--tap <name>` | Limit to tap sources (repeatable: `files`, `linear`, `notion`). Default: all configured taps. (`--provider` is a deprecated alias) |
 | `--terse` | Paths + one-sentence summaries, no symbols — minimal context cost |
 | `--no-symbols` | File-level results only, omit symbol nesting |
 | `-k, --top-k <N>` | Max file results (default 5). Use `-k 2` for precise hits |
