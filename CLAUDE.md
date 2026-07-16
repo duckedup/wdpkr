@@ -145,6 +145,18 @@ A `null` value means the symbol hasn't been indexed with call-graph data yet (ru
 
 When changing a symbol, check its `called_by` to find all dependents — read those files to verify your change doesn't break callers. When exploring unfamiliar code, check `calls` to understand what a function depends on before diving into its implementation.
 
+#### Decay + reinforce (per-tap freshness)
+
+Taps can opt into **time decay** (configured per tap in `config.yaml` under `settings.decay`). When enabled, a result's score is multiplied by `max(floor, 0.5 ^ (age_days / half_life_days))` where age is measured from the document's last index/reinforce time — so stale, unused documents (e.g. old Notion specs) sink in ranking but never drop below `floor` (they stay findable). Decay is a **ranking nudge only**; it never deletes anything. Files typically leave decay off; `notion`/`linear` turn it on.
+
+If a search surfaces a document you actually used, tell wdpkr it was relevant so it stops decaying:
+
+```bash
+wdpkr reinforce notion://<page-id>   # bumps last_used_at to now; no re-embedding
+```
+
+The id is the result's `path` (e.g. `notion://<page-id>`); the tap is inferred from the URI scheme. This is cheap (a metadata write) — reinforce the specs an agent relied on so the next search ranks them higher.
+
 #### When to use
 
 - **Conceptual questions** where you don't know what to grep for: "where does X live," "how is Y implemented"

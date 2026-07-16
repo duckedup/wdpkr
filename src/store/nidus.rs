@@ -270,6 +270,32 @@ impl VectorStore for NidusStore {
         .await
     }
 
+    async fn touch_by_file(&self, ns: &Namespace, file_path: &str, ts: i64) -> Result<usize> {
+        // nidus has no attribute-only patch (unlike Turbopuffer's `patch_rows`),
+        // so we re-upsert the existing records with the bumped timestamp. The
+        // stored vectors are reused verbatim — no re-embedding — though nidus
+        // re-normalizes them on write, an idempotent no-op up to float epsilon.
+        let ns = ns.as_str().to_string();
+        let file_path = file_path.to_string();
+        self.with_db(move |db| {
+            let mut updated: Vec<Record> = Vec::new();
+            for mut r in db.get_all(&ns) {
+                if attr_str(&r.attrs, "file_path").as_deref() == Some(file_path.as_str()) {
+                    r.attrs.insert("last_used_at".into(), Value::Int(ts));
+                    updated.push(r);
+                }
+            }
+            let n = updated.len();
+            if n > 0 {
+                db.upsert(&ns, &updated)
+                    .with_context(|| format!("touching docs in nidus collection {ns}"))?;
+                db.flush()?;
+            }
+            Ok(n)
+        })
+        .await
+    }
+
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>> {
         let ns = ns.as_str().to_string();
         self.with_db(move |db| {
@@ -403,6 +429,9 @@ fn to_record(doc: &VectorDocument) -> Record {
     if let Some(ref v) = doc.called_by {
         attrs.insert("called_by".into(), Value::List(v.clone()));
     }
+    if let Some(ts) = doc.last_used_at {
+        attrs.insert("last_used_at".into(), Value::Int(ts));
+    }
     Record {
         id: doc.id.clone(),
         vector: Some(doc.vector.clone()),
@@ -427,6 +456,7 @@ fn record_to_doc(r: Record) -> VectorDocument {
         content_hash: attr_str(&r.attrs, "content_hash"),
         calls: attr_list(&r.attrs, "calls"),
         called_by: attr_list(&r.attrs, "called_by"),
+        last_used_at: attr_i64(&r.attrs, "last_used_at"),
     }
 }
 
@@ -446,6 +476,7 @@ fn hit_to_result(h: Hit) -> SearchResult {
         language: attr_str(&h.attrs, "language"),
         calls: attr_list(&h.attrs, "calls"),
         called_by: attr_list(&h.attrs, "called_by"),
+        last_used_at: attr_i64(&h.attrs, "last_used_at"),
     }
 }
 
@@ -459,6 +490,13 @@ fn attr_str(attrs: &BTreeMap<String, Value>, key: &str) -> Option<String> {
 fn attr_u32(attrs: &BTreeMap<String, Value>, key: &str) -> Option<u32> {
     match attrs.get(key) {
         Some(Value::Int(i)) => u32::try_from(*i).ok(),
+        _ => None,
+    }
+}
+
+fn attr_i64(attrs: &BTreeMap<String, Value>, key: &str) -> Option<i64> {
+    match attrs.get(key) {
+        Some(Value::Int(i)) => Some(*i),
         _ => None,
     }
 }
@@ -544,6 +582,7 @@ mod tests {
             content_hash: Some(content_hash.into()),
             calls: None,
             called_by: None,
+            last_used_at: None,
         }
     }
 
@@ -562,6 +601,7 @@ mod tests {
             content_hash: None,
             calls: Some(vec!["other_fn".into()]),
             called_by: Some(vec![]),
+            last_used_at: None,
         }
     }
 
@@ -594,6 +634,17 @@ mod tests {
         // None vs Some([]) distinction preserved through attr omission.
         assert_eq!(back.calls, Some(vec!["other_fn".to_string()]));
         assert_eq!(back.called_by, Some(vec![]));
+    }
+
+    #[test]
+    fn record_round_trip_preserves_last_used_at() {
+        let mut doc = file_doc("a", vec![1.0, 0.0, 0.0], "src/a.rs", "h1");
+        doc.last_used_at = Some(1_700_000_000);
+        let back = record_to_doc(to_record(&doc));
+        assert_eq!(back.last_used_at, Some(1_700_000_000));
+        // Absent timestamp stays None.
+        let none = file_doc("b", vec![1.0, 0.0, 0.0], "src/b.rs", "h2");
+        assert_eq!(record_to_doc(to_record(&none)).last_used_at, None);
     }
 
     #[test]
@@ -686,6 +737,60 @@ mod tests {
         store.create_namespace(&ns, 3).await.unwrap();
         store.delete_namespace(&ns).await.unwrap();
         assert!(!store.namespace_exists(&ns).await.unwrap());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn touch_by_file_bumps_last_used_at_without_touching_vectors() {
+        let store = seeded_store().await;
+        let ns = Namespace::from("repo");
+        // A doc + a section child share the same file_path.
+        let doc = file_doc("d1", vec![0.1, 0.2, 0.3], "notion://abc", "h1");
+        let sec = symbol_doc("d1#s", vec![0.4, 0.5, 0.6], "notion://abc", "Rounding");
+        store.upsert(&ns, &[doc, sec]).await.unwrap();
+
+        // Capture stored vectors (nidus L2-normalizes on write) before touching.
+        let before: HashMap<String, Vec<f32>> = store
+            .list_documents(&ns)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.id, d.vector))
+            .collect();
+
+        let n = store
+            .touch_by_file(&ns, "notion://abc", 1_700_000_042)
+            .await
+            .unwrap();
+        assert_eq!(n, 2, "both the doc and its section child are touched");
+
+        let docs = store.list_documents(&ns).await.unwrap();
+        for d in &docs {
+            assert_eq!(d.last_used_at, Some(1_700_000_042));
+            // Vectors are reused (no re-embed); nidus re-normalizes on write, so
+            // compare within float epsilon rather than bit-for-bit.
+            let prev = &before[&d.id];
+            assert_eq!(d.vector.len(), prev.len());
+            for (a, b) in d.vector.iter().zip(prev) {
+                assert!(
+                    (a - b).abs() < 1e-6,
+                    "vector for {} drifted: {a} vs {b}",
+                    d.id
+                );
+            }
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn touch_by_file_unknown_path_updates_nothing() {
+        let store = seeded_store().await;
+        let ns = Namespace::from("repo");
+        let n = store
+            .touch_by_file(&ns, "notion://missing", 123)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     // ── Metadata ──────────────────────────────────────────────────────

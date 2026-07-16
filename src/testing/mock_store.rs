@@ -161,6 +161,21 @@ impl VectorStore for MockVectorStore {
         Ok(before - ns_data.documents.len())
     }
 
+    async fn touch_by_file(&self, ns: &Namespace, file_path: &str, ts: i64) -> Result<usize> {
+        let mut lock = self.namespaces.lock().unwrap();
+        let ns_data = lock
+            .get_mut(ns.as_str())
+            .ok_or_else(|| anyhow::anyhow!("namespace '{}' not found", ns.as_str()))?;
+        let mut updated = 0;
+        for doc in ns_data.documents.values_mut() {
+            if doc.file_path == file_path {
+                doc.last_used_at = Some(ts);
+                updated += 1;
+            }
+        }
+        Ok(updated)
+    }
+
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>> {
         let lock = self.namespaces.lock().unwrap();
         let ns_data = lock
@@ -248,6 +263,7 @@ impl VectorStore for MockVectorStore {
                 language: doc.language.clone(),
                 calls: doc.calls.clone(),
                 called_by: doc.called_by.clone(),
+                last_used_at: doc.last_used_at,
             })
             .collect())
     }
@@ -288,6 +304,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         }
     }
 

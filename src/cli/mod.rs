@@ -4,6 +4,7 @@ pub mod eval;
 pub mod index;
 pub mod init;
 pub mod prompt;
+pub mod reinforce;
 pub mod search;
 
 pub use config::{ConfigArgs, ConfigCommand};
@@ -11,6 +12,7 @@ pub use delete::DeleteArgs;
 pub use eval::EvalArgs;
 pub use index::IndexArgs;
 pub use init::InitArgs;
+pub use reinforce::ReinforceArgs;
 pub use search::SearchArgs;
 
 use anyhow::Result;
@@ -45,6 +47,8 @@ pub enum Command {
     Index(IndexArgs),
     /// Delete vectors from the index by file path glob
     Delete(DeleteArgs),
+    /// Mark document(s) as recently used, refreshing their decay ranking
+    Reinforce(ReinforceArgs),
     /// Initialize wdpkr for a repository
     Init(InitArgs),
     /// Run evaluation suite to measure search quality and compression
@@ -58,6 +62,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Search(args) => search::run(args).await,
         Command::Index(args) => index::run(args).await,
         Command::Delete(args) => delete::run(args).await,
+        Command::Reinforce(args) => reinforce::run(args).await,
         Command::Init(args) => init::run(args).await,
         Command::Eval(args) => eval::run(args).await,
     }
@@ -257,6 +262,32 @@ mod tests {
                 );
             }
             _ => panic!("expected Index"),
+        }
+    }
+
+    // ── reinforce ─────────────────────────────────────────────────────
+
+    #[test]
+    fn reinforce_requires_an_id() {
+        assert!(Cli::try_parse_from(["wdpkr", "reinforce"]).is_err());
+    }
+
+    #[test]
+    fn reinforce_parses_repeated_ids() {
+        let cli =
+            Cli::try_parse_from(["wdpkr", "reinforce", "notion://399cb3ca", "notion://7a2b9f"])
+                .unwrap();
+        match cli.command {
+            Command::Reinforce(args) => {
+                assert_eq!(
+                    args.ids,
+                    vec![
+                        "notion://399cb3ca".to_string(),
+                        "notion://7a2b9f".to_string()
+                    ]
+                );
+            }
+            _ => panic!("expected Reinforce"),
         }
     }
 

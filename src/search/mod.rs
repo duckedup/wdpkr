@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
+use crate::config::DecayConfig;
 use crate::embed::{Embedder, embedder_identity};
 use crate::store::{ChunkKind, Namespace, SearchOptions, SearchResult, VectorStore};
 
@@ -67,11 +68,15 @@ pub struct SymbolResult {
 pub struct SearchRun {
     embedder: Box<dyn Embedder>,
     store: Box<dyn VectorStore>,
-    namespaces: Vec<(Namespace, Option<String>)>,
+    /// (namespace, source_label, decay_config) per selected tap.
+    namespaces: Vec<(Namespace, Option<String>, DecayConfig)>,
+    /// Current unix seconds, used to age documents for decay. `0` disables the
+    /// age effect (decay configs are also disabled by default).
+    now: i64,
 }
 
 impl SearchRun {
-    /// Single-namespace constructor (backward compat).
+    /// Single-namespace constructor (backward compat). Decay disabled.
     pub fn new(
         embedder: Box<dyn Embedder>,
         store: Box<dyn VectorStore>,
@@ -80,13 +85,14 @@ impl SearchRun {
         Self {
             embedder,
             store,
-            namespaces: vec![(namespace, None)],
+            namespaces: vec![(namespace, None, DecayConfig::default())],
+            now: 0,
         }
     }
 
     /// Multi-namespace constructor. Each entry is (namespace, source_label).
     /// The source label is `None` for the files tap (omitted from JSON)
-    /// and `Some("linear")` etc. for external taps.
+    /// and `Some("linear")` etc. for external taps. Decay disabled.
     pub fn new_multi(
         embedder: Box<dyn Embedder>,
         store: Box<dyn VectorStore>,
@@ -95,7 +101,27 @@ impl SearchRun {
         Self {
             embedder,
             store,
+            namespaces: namespaces
+                .into_iter()
+                .map(|(ns, src)| (ns, src, DecayConfig::default()))
+                .collect(),
+            now: 0,
+        }
+    }
+
+    /// Multi-namespace constructor with per-tap decay. `now` is the current
+    /// unix time used to age documents.
+    pub fn new_multi_with_decay(
+        embedder: Box<dyn Embedder>,
+        store: Box<dyn VectorStore>,
+        namespaces: Vec<(Namespace, Option<String>, DecayConfig)>,
+        now: i64,
+    ) -> Self {
+        Self {
+            embedder,
+            store,
             namespaces,
+            now,
         }
     }
 
@@ -128,7 +154,7 @@ impl SearchRun {
         let mut primary_indexed_at: Option<String> = None;
         let mut any_namespace_found = false;
 
-        for (ns, source) in &self.namespaces {
+        for (ns, source, decay) in &self.namespaces {
             if !self.store.namespace_exists(ns).await? {
                 continue;
             }
@@ -164,7 +190,8 @@ impl SearchRun {
                 )
                 .await?;
 
-            for r in ns_results {
+            for mut r in ns_results {
+                r.score = apply_decay(r.score, r.last_used_at, self.now, decay);
                 all_results.push((r, source.clone()));
             }
         }
@@ -173,7 +200,7 @@ impl SearchRun {
             let ns_name = self
                 .namespaces
                 .first()
-                .map(|(ns, _)| ns.as_str().to_string())
+                .map(|(ns, _, _)| ns.as_str().to_string())
                 .unwrap_or_default();
             bail!("index not found for namespace '{ns_name}'; run `wdpkr index` first");
         }
@@ -187,6 +214,17 @@ impl SearchRun {
             indexed_at: primary_indexed_at,
             results,
         })
+    }
+}
+
+/// Apply a namespace's decay to a raw cosine score. A document with a known
+/// `last_used_at` is aged by `now - last_used_at` and multiplied by the tap's
+/// decay curve (floored). Disabled decay, or an unknown timestamp, leaves the
+/// score unchanged.
+fn apply_decay(score: f32, last_used_at: Option<i64>, now: i64, decay: &DecayConfig) -> f32 {
+    match last_used_at {
+        Some(ts) if decay.enabled => score * decay.multiplier(now - ts),
+        _ => score,
     }
 }
 
@@ -291,6 +329,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
             VectorDocument {
                 id: "s-release".into(),
@@ -306,6 +345,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
             VectorDocument {
                 id: "s-correct".into(),
@@ -321,6 +361,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
             // Auth module — close to [0,1,0]
             VectorDocument {
@@ -337,6 +378,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
             VectorDocument {
                 id: "s-authenticate".into(),
@@ -352,6 +394,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
             // API module — close to [0,0,1]
             VectorDocument {
@@ -368,6 +411,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
             VectorDocument {
                 id: "s-handle".into(),
@@ -383,6 +427,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
         ];
         store.upsert(&Namespace::from("test"), &docs).await.unwrap();
@@ -396,6 +441,114 @@ mod tests {
         // "auth query" embeds close to the auth file
         e.set_override("user authentication", vec![0.05, 0.95, 0.0]);
         e
+    }
+
+    // ── decay ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn apply_decay_disabled_is_identity() {
+        let d = DecayConfig::default(); // disabled
+        assert_eq!(apply_decay(0.8, Some(0), 10_000_000, &d), 0.8);
+    }
+
+    #[test]
+    fn apply_decay_unknown_timestamp_is_identity() {
+        let d = DecayConfig {
+            enabled: true,
+            half_life_days: 90.0,
+            floor: 0.4,
+        };
+        assert_eq!(apply_decay(0.8, None, 10_000_000, &d), 0.8);
+    }
+
+    #[test]
+    fn apply_decay_ages_score_with_floor() {
+        let d = DecayConfig {
+            enabled: true,
+            half_life_days: 90.0,
+            floor: 0.4,
+        };
+        let now = 100 * 86_400;
+        // Fresh (age 0) → unchanged.
+        assert!((apply_decay(0.8, Some(now), now, &d) - 0.8).abs() < 1e-4);
+        // One half-life old → ~half.
+        let one_hl = now - 90 * 86_400;
+        assert!((apply_decay(0.8, Some(one_hl), now, &d) - 0.4).abs() < 1e-3);
+        // Ancient → floored (0.8 * 0.4).
+        let ancient = now - 10_000 * 86_400;
+        assert!((apply_decay(0.8, Some(ancient), now, &d) - 0.32).abs() < 1e-4);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn search_decay_reranks_stale_below_fresh() {
+        // Two docs with identical vectors; decay must sink the stale one.
+        let store = MockVectorStore::new();
+        let ns = Namespace::from("test--notion");
+        store.create_namespace(&ns, 3).await.unwrap();
+        let now = 1_000 * 86_400;
+        let mk = |id: &str, path: &str, ts: i64| VectorDocument {
+            id: id.into(),
+            vector: vec![1.0, 0.0, 0.0],
+            summary: format!("doc {id}"),
+            file_path: path.into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: None,
+            content_hash: None,
+            calls: None,
+            called_by: None,
+            last_used_at: Some(ts),
+        };
+        store
+            .upsert(
+                &ns,
+                &[
+                    mk("fresh", "notion://fresh", now),
+                    mk("stale", "notion://stale", now - 3_650 * 86_400),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let mut embedder = MockEmbedder::new(3);
+        embedder.set_override("q", vec![1.0, 0.0, 0.0]);
+
+        let decay = DecayConfig {
+            enabled: true,
+            half_life_days: 90.0,
+            floor: 0.4,
+        };
+        let search = SearchRun::new_multi_with_decay(
+            Box::new(embedder),
+            Box::new(store),
+            vec![(ns, Some("notion".into()), decay)],
+            now,
+        );
+        let report = search
+            .run(&SearchParams {
+                query: "q".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.results.len(), 2);
+        assert_eq!(report.results[0].path, "notion://fresh");
+        assert_eq!(report.results[1].path, "notion://stale");
+        assert!(
+            report.results[0].score > report.results[1].score,
+            "fresh ({}) should outrank stale ({})",
+            report.results[0].score,
+            report.results[1].score
+        );
     }
 
     #[cfg_attr(miri, ignore)]
@@ -780,6 +933,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         }];
         store
             .upsert(&Namespace::from("test--linear"), &linear_docs)

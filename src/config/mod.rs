@@ -45,7 +45,7 @@ pub use store::{
     default_nidus_path,
 };
 pub use summarizer::{SummarizerConfig, SummarizerSources};
-pub use tap::{FileTapConfig, TapConfig, TapsSources};
+pub use tap::{DecayConfig, FileTapConfig, TapConfig, TapsSources};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};

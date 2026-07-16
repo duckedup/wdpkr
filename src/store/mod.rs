@@ -90,6 +90,12 @@ pub trait VectorStore: Send + Sync {
     /// Delete all documents whose `file_path` matches a glob pattern.
     async fn delete_by_glob(&self, ns: &Namespace, pattern: &str) -> Result<usize>;
 
+    /// Set `last_used_at` to `ts` (unix seconds) for every document whose
+    /// `file_path` equals `file_path`, reusing the stored vectors (no
+    /// re-embedding). Powers `wdpkr reinforce`. Returns the number of documents
+    /// updated (0 if the path isn't indexed).
+    async fn touch_by_file(&self, ns: &Namespace, file_path: &str, ts: i64) -> Result<usize>;
+
     /// Return a map of file_path → content_hash for all file-level documents
     /// in the namespace. Used by the indexer to skip unchanged files.
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>>;
@@ -194,6 +200,10 @@ pub struct VectorDocument {
     /// Symbols that reference this one. `None` = not yet indexed with
     /// call-graph data; `Some(vec![])` = genuinely no inbound callers.
     pub called_by: Option<Vec<String>>,
+    /// Unix seconds when this document was last indexed or reinforced. Drives
+    /// per-tap search-time decay (`wdpkr reinforce` bumps it). `None` for docs
+    /// stored before decay existed — treated as "never decays".
+    pub last_used_at: Option<i64>,
 }
 
 // ── SearchOptions ─────────────────────────────────────────────────────────
@@ -233,6 +243,10 @@ pub struct SearchResult {
     pub calls: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub called_by: Option<Vec<String>>,
+    /// Unix seconds when this document was last indexed or reinforced. Used by
+    /// the search layer to apply per-tap decay; not part of the user JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<i64>,
 }
 
 // ── UpsertStats ───────────────────────────────────────────────────────────
@@ -332,6 +346,7 @@ mod tests {
             language: Some("rust".into()),
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("symbol_name"));
@@ -356,6 +371,7 @@ mod tests {
             language: Some("rust".into()),
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains(r#""symbol_name":"run""#));

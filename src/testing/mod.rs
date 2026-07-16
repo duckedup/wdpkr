@@ -38,6 +38,7 @@ pub fn sample_document(file_path: &str, chunk_kind: ChunkKind) -> VectorDocument
         content_hash: None,
         calls: None,
         called_by: None,
+        last_used_at: None,
     }
 }
 
@@ -63,6 +64,7 @@ pub fn sample_symbol_document(
         content_hash: None,
         calls: None,
         called_by: None,
+        last_used_at: None,
     }
 }
 
@@ -81,6 +83,7 @@ pub fn sample_result(file_path: &str, score: f32, chunk_kind: ChunkKind) -> Sear
         language: Some("rust".into()),
         calls: None,
         called_by: None,
+        last_used_at: None,
     }
 }
 
@@ -105,6 +108,7 @@ pub fn sample_symbol_result(
         language: Some("rust".into()),
         calls: None,
         called_by: None,
+        last_used_at: None,
     }
 }
 

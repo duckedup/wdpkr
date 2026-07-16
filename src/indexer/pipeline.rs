@@ -143,6 +143,7 @@ pub async fn process_item(
         content_hash: Some(item.content_hash.clone()),
         calls: None,
         called_by: None,
+        last_used_at: None,
     });
 
     for (child, text) in item.children.iter().zip(symbol_texts) {
@@ -166,6 +167,7 @@ pub async fn process_item(
             content_hash: None,
             calls: Some(child.references.clone()),
             called_by: None,
+            last_used_at: None,
         });
     }
     let embed_time = t2.elapsed();

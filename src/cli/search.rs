@@ -68,7 +68,7 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     };
 
     let selected_taps = select_taps(&config.taps, &args.tap)?;
-    let namespaces: Vec<(Namespace, Option<String>)> = selected_taps
+    let namespaces: Vec<(Namespace, Option<String>, crate::config::DecayConfig)> = selected_taps
         .iter()
         .map(|p| {
             let ns = match namespace_suffix(&p.name) {
@@ -80,11 +80,13 @@ pub async fn run(args: SearchArgs) -> Result<()> {
             } else {
                 Some(p.name.clone())
             };
-            (ns, source)
+            let decay = p.decay()?;
+            Ok((ns, source, decay))
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
-    let search = SearchRun::new_multi(embedder, store, namespaces);
+    let now = crate::indexer::now_unix_secs();
+    let search = SearchRun::new_multi_with_decay(embedder, store, namespaces, now);
     let report = search.run(&params).await?;
 
     let rendered = if args.pretty {
