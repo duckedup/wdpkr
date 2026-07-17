@@ -35,8 +35,9 @@ pub enum DecisionCommand {
     Add(AddArgs),
     /// Edit an existing decision (only the fields you pass change)
     Edit(EditArgs),
-    /// Remove decision(s) by id
-    Rm(RmArgs),
+    /// Delete decision(s) by id
+    #[command(alias = "rm")]
+    Delete(DeleteArgs),
     /// List all recorded decisions
     List(ListArgs),
 }
@@ -117,8 +118,8 @@ pub struct EditArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct RmArgs {
-    /// Decision id(s) to remove
+pub struct DeleteArgs {
+    /// Decision id(s) to delete
     #[arg(required = true)]
     pub ids: Vec<u32>,
 }
@@ -136,7 +137,7 @@ pub async fn run(args: DecisionArgs) -> Result<()> {
     match args.command {
         DecisionCommand::Add(a) => run_add(a).await,
         DecisionCommand::Edit(a) => run_edit(a).await,
-        DecisionCommand::Rm(a) => run_rm(a).await,
+        DecisionCommand::Delete(a) => run_delete(a).await,
         DecisionCommand::List(a) => run_list(a).await,
     }
 }
@@ -314,9 +315,9 @@ async fn run_edit(args: EditArgs) -> Result<()> {
     Ok(())
 }
 
-// ── rm ───────────────────────────────────────────────────────────────────────
+// ── delete ─────────────────────────────────────────────────────────────────────
 
-async fn run_rm(args: RmArgs) -> Result<()> {
+async fn run_delete(args: DeleteArgs) -> Result<()> {
     let ctx = setup().await?;
     if !ctx.store.namespace_exists(&ctx.ns).await? {
         bail!("no decisions recorded yet");
@@ -324,17 +325,17 @@ async fn run_rm(args: RmArgs) -> Result<()> {
     let mut meta = ctx.store.get_metadata(&ctx.ns).await?;
     let mut reg = load_registry(&meta)?;
 
-    let mut removed = 0usize;
+    let mut deleted = 0usize;
     for id in &args.ids {
         match reg.remove(*id) {
             Some(_) => {
                 ctx.store
                     .delete_by_file(&ctx.ns, &decision_uri_for(*id))
                     .await?;
-                removed += 1;
+                deleted += 1;
                 eprintln!(
                     "  {} {}",
-                    "removed".if_supports_color(Stream::Stderr, |s| s.yellow()),
+                    "deleted".if_supports_color(Stream::Stderr, |s| s.yellow()),
                     decision_uri_for(*id).if_supports_color(Stream::Stderr, |s| s.cyan()),
                 );
             }
@@ -345,10 +346,10 @@ async fn run_rm(args: RmArgs) -> Result<()> {
         }
     }
 
-    if removed > 0 {
+    if deleted > 0 {
         persist_registry(&ctx, &mut meta, &reg).await?;
     }
-    eprintln!("Removed {removed} decision(s)");
+    eprintln!("Deleted {deleted} decision(s)");
     Ok(())
 }
 
@@ -625,15 +626,24 @@ mod tests {
             _ => panic!("expected decision edit"),
         }
 
-        let cli = Cli::try_parse_from(["wdpkr", "decision", "rm", "1", "2", "3"]).unwrap();
+        let cli = Cli::try_parse_from(["wdpkr", "decision", "delete", "1", "2", "3"]).unwrap();
         match cli.command {
             Command::Decision(DecisionArgs {
-                command: DecisionCommand::Rm(a),
+                command: DecisionCommand::Delete(a),
             }) => assert_eq!(a.ids, vec![1, 2, 3]),
-            _ => panic!("expected decision rm"),
+            _ => panic!("expected decision delete"),
         }
 
-        assert!(Cli::try_parse_from(["wdpkr", "decision", "rm"]).is_err());
+        // `rm` remains a hidden alias for `delete`.
+        let cli = Cli::try_parse_from(["wdpkr", "decision", "rm", "7"]).unwrap();
+        match cli.command {
+            Command::Decision(DecisionArgs {
+                command: DecisionCommand::Delete(a),
+            }) => assert_eq!(a.ids, vec![7]),
+            _ => panic!("expected `rm` to alias `delete`"),
+        }
+
+        assert!(Cli::try_parse_from(["wdpkr", "decision", "delete"]).is_err());
 
         let cli = Cli::try_parse_from(["wdpkr", "decision", "list", "--pretty"]).unwrap();
         match cli.command {

@@ -173,7 +173,7 @@ wdpkr decision add "Half-up rounding for commission" \
   --tap notion --doc <page-id>   # optionally pull provenance from a tap
 ```
 
-`--supersedes <id>` retires an old decision (kept, but excluded from active recall); `--overrides <id>` makes a narrow decision win over a broader one in overlapping areas. Manage with `wdpkr decision edit|rm|list`. See `docs/src/content/docs/guides/decisions.md`.
+`--supersedes <id>` retires an old decision (kept, but excluded from active recall); `--overrides <id>` makes a narrow decision win over a broader one in overlapping areas. Manage with `wdpkr decision edit|delete|list`. See `docs/src/content/docs/guides/decisions.md`.
 
 #### When to use
 

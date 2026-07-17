@@ -172,7 +172,7 @@ wdpkr decision add "Half-up rounding for commission" \
   --supersedes 3
 wdpkr decision list
 wdpkr decision edit 7 --status deprecated
-wdpkr decision rm 4
+wdpkr decision delete 4
 ```
 
 ### `decision add <title>`
@@ -199,11 +199,11 @@ Takes the same field flags as `add`; only the fields you pass change. `--area`,
 given; `--tap`/`--doc` *append* new provenance. Content changes re-embed the
 decision.
 
-### `decision rm <id>...`
+### `decision delete <id>...`
 
-Remove one or more decisions by id — deletes their vectors and registry entries
-and scrubs any dangling links (supersedes/overrides/relates-to) in other
-decisions.
+Delete one or more decisions by id (aliased `rm`) — removes their vectors and
+registry entries and scrubs any dangling links (supersedes/overrides/relates-to)
+in other decisions. Mirrors the top-level [`delete`](#delete) verb.
 
 ### `decision list`
 

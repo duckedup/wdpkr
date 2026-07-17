@@ -101,12 +101,12 @@ Use `--relates-to` for looser links that don't change ranking.
 ```bash
 wdpkr decision edit 7 --area 'src/finance/commission*'   # re-scope
 wdpkr decision edit 7 --status deprecated                # retire it
-wdpkr decision rm 4                                      # delete + scrub links
+wdpkr decision delete 4                                  # delete + scrub links
 wdpkr decision list --pretty                             # review the registry
 ```
 
 `edit` changes only the fields you pass; content changes re-embed the decision.
-`rm` deletes the decision's vectors and registry entry and removes any dangling
+`delete` (aliased `rm`) removes the decision's vectors and registry entry and any dangling
 references to it from other decisions.
 
 ## In search
