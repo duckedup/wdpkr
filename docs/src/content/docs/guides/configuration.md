@@ -119,7 +119,7 @@ prefer the nested `store.turbopuffer.api_key`.
 
 Data sources to index. Omit `taps` to index repository code only (the default
 `files` tap). Each entry has a `name` and optional per-tap `settings`. See
-[Taps](/guides/taps/) for the full Linear tap reference.
+[Taps](/guides/taps/) for the full Linear and Notion tap references.
 
 ```yaml
 taps:
@@ -129,15 +129,24 @@ taps:
       amount: 100
       order_by: updatedAt
       include_comments: true
+  - name: notion
+    settings:
+      include_sections: true
+      decay:                  # opt-in per-tap search decay
+        enabled: true
+        half_life_days: 90
+        floor: 0.4
 ```
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `taps[].name` | `files` | Tap name — `files` or `linear` |
-| `taps[].settings` | — | Per-tap settings (e.g. the Linear tap's `amount`, `order_by`, `team`, `include_comments`, `api_key_env`) |
+| `taps[].name` | `files` | Tap name — `files`, `linear`, or `notion` |
+| `taps[].settings` | — | Per-tap settings (Linear: `amount`, `order_by`, `team`, `include_comments`, `api_key_env`; Notion: `api_key`, `api_key_env`, `notion_version`, `include_sections`) |
+| `taps[].settings.decay` | off | Opt-in search decay — `enabled`, `half_life_days` (default `90`), `floor` (default `0.4`). Ages down stale docs at search time without deleting them; see [Decay and reinforce](/guides/taps/#decay-and-reinforce) |
 
-Set the Linear API key via the `LINEAR_API_KEY` environment variable, not the
-config file.
+Set API keys via environment variables (`LINEAR_API_KEY`, `NOTION_API_KEY`), not
+the config file. The Notion tap also accepts an inline `settings.api_key` for
+local use — keep the config file private if you use it.
 
 ## Environment variables
 
@@ -152,6 +161,7 @@ VOYAGE_API_KEY                 # embedding (required for default provider)
 OPENAI_API_KEY                 # embedding (OpenAI provider)
 OLLAMA_HOST                    # embedding (Ollama provider)
 LINEAR_API_KEY                 # Linear tap (when the linear tap is configured)
+NOTION_API_KEY                 # Notion tap (when the notion tap is configured)
 
 # Providers & models
 WDPKR_STORE_PROVIDER           # turbopuffer | nidus

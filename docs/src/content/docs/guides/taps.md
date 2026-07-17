@@ -1,6 +1,6 @@
 ---
 title: Taps
-description: Index data sources beyond code — like Linear issues — into the same searchable index.
+description: Index data sources beyond code — Linear issues, Notion pages — into the same searchable index.
 ---
 
 A **tap** is a data source wdpkr indexes. The default tap is `files`: it walks
@@ -11,11 +11,19 @@ search pipeline.
 The motivating case: give an AI agent the *why* behind the code, not just the
 *what*. Indexing your **Linear** issues — their descriptions and the discussion
 in comments — lets an agent ask "why did we change the rate table?" and get the
-decision, not just the diff.
+decision, not just the diff. **Notion** pages add the specs and design docs that
+sit behind the work.
 
 Each non-`files` tap is indexed into its own namespace (`<namespace>--<tap>`) and
 its results are tagged with a `source` field, so a single `wdpkr search` can span
-code and issues while keeping them distinguishable.
+code, issues, and docs while keeping them distinguishable.
+
+Two ingest models, depending on the source:
+
+- **Reconciled** (Linear): every run fetches the newest N items and that set
+  *is* the desired index state — anything else is pruned.
+- **Targeted, additive** (Notion): you name the exact documents to index, and
+  nothing else is touched. Removal is explicit.
 
 ## Configuring taps
 
@@ -32,6 +40,16 @@ taps:
       # team: ENG           # optional team-key filter
       include_comments: true
       # api_key_env: LINEAR_API_KEY   # env var holding the key (default)
+  - name: notion            # Notion pages (implementation specs)
+    settings:
+      # api_key: secret_...           # inline token (prefer NOTION_API_KEY)
+      # api_key_env: NOTION_API_KEY   # env var holding the token (default)
+      # notion_version: "2026-03-11"  # Notion-Version header (default)
+      include_sections: true          # per-heading section children (default)
+      decay:                          # per-tap search decay (opt-in)
+        enabled: true
+        half_life_days: 90            # score halves every 90 days unused
+        floor: 0.4                    # never decays below 0.4× raw score
 ```
 
 ## The Linear tap
@@ -71,18 +89,53 @@ failed fetch deletes nothing, so a transient API error can't wipe the index.)
 summarization cost — one summary per issue. With no `LINEAR_API_KEY` set, the
 Linear estimate is skipped and the code estimate still runs.
 
+## The Notion tap
+
+Indexes specific Notion pages — your implementation specs and design docs — on
+demand. Unlike Linear, the Notion tap is **targeted and additive**: it fetches
+only the page IDs you name and never prunes anything else. Removal is explicit.
+
+Point it at pages by ID or URL with `--doc` (repeatable):
+
+```bash
+export NOTION_API_KEY=secret_...
+wdpkr index --tap notion --doc <page-id-or-url> --doc <another>
+```
+
+Each page becomes one document keyed `notion://{page_id}`: a doc-level summary
+vector plus — when `include_sections` is on — one **section child** per heading
+(split on `heading_1/2/3`). That lets an agent match the exact section and use
+the page ID to fetch the full document for context. Sub-pages (`child_page`
+blocks) are **not** crawled; they're recorded as link references in the parent's
+text. Index a sub-page explicitly with its own `--doc`.
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `api_key` | — | Inline integration token. Takes precedence over `api_key_env`; keep the config file private |
+| `api_key_env` | `NOTION_API_KEY` | Name of the env var holding the integration token |
+| `notion_version` | `2026-03-11` | `Notion-Version` request header |
+| `include_sections` | `true` | Emit per-heading section children alongside the doc-level summary |
+| `decay` | — | Opt-in per-tap search decay (see below) |
+
+Remove a stale spec explicitly with the `notion` namespace:
+
+```bash
+wdpkr delete --tap notion "notion://<page-id>*"
+```
+
 ## Searching across taps
 
 By default `wdpkr search` queries every configured tap and merges results by
-score. Use `--provider` to narrow:
+score. Use `--tap` to narrow (repeatable):
 
 ```bash
-wdpkr search "why did we change the rate table" --provider linear --pretty
-wdpkr search "rate table lookup" --provider files     # code only
-wdpkr search "rate table"                              # code + Linear, merged
+wdpkr search "why did we change the rate table" --tap linear --pretty
+wdpkr search "rate table lookup" --tap files          # code only
+wdpkr search "auth spec" --tap notion --tap linear    # docs + issues
+wdpkr search "rate table"                              # all taps, merged
 ```
 
-Linear results look like:
+Non-`files` results carry a `source` field and a scheme-prefixed `path`:
 
 ```json
 {
@@ -93,8 +146,45 @@ Linear results look like:
 }
 ```
 
-## What's next
+(`--provider` is a deprecated alias for `--tap`.)
 
-The tap system is source-agnostic. Notion (via `notion-mg`) is a natural next
-source for documents that change less often than issues — same pattern: a
-namespace suffix, a `source` tag, and a `--provider` to scope search.
+## Decay and reinforce
+
+Docs go stale at a different rate than code. A tap can opt into **time decay** so
+that documents nobody has touched in a while sink in the rankings — without ever
+disappearing. Set a `decay` block under the tap's `settings`:
+
+```yaml
+- name: notion
+  settings:
+    decay:
+      enabled: true
+      half_life_days: 90   # default 90
+      floor: 0.4           # default 0.4
+```
+
+At search time a result's score is multiplied by:
+
+```
+max(floor, 0.5 ^ (age_days / half_life_days))
+```
+
+where `age_days` is measured from the document's last index or reinforce time.
+So a document's contribution halves every `half_life_days` it goes unused but
+never drops below `floor × raw score` — stale specs rank lower yet stay
+findable. Decay is a **ranking nudge only**; it never deletes anything.
+`files` typically leaves decay off; `notion` and `linear` are good candidates
+to turn it on.
+
+When a search surfaces a document you actually relied on, tell wdpkr so it stops
+decaying:
+
+```bash
+wdpkr reinforce notion://<page-id>
+```
+
+That bumps the document's `last_used_at` to now — a cheap metadata write, no
+re-embedding — so the next search ranks it as fresh again. The id is the
+result's `path`; the tap is inferred from the URI scheme (a bare path targets
+the `files` namespace). Pass multiple ids to reinforce several at once. See
+[`reinforce`](/reference/commands/#reinforce) for the command reference.
