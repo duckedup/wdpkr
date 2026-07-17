@@ -2,6 +2,7 @@ pub mod ai_providers;
 pub mod chunk;
 pub mod cli;
 pub mod config;
+pub mod decision;
 pub mod embed;
 pub mod eval;
 pub mod http;

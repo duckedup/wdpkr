@@ -158,6 +158,23 @@ wdpkr reinforce notion://<page-id>   # bumps last_used_at to now; no re-embeddin
 
 The id is the result's `path` (e.g. `notion://<page-id>`); the tap is inferred from the URI scheme. This is cheap (a metadata write) — reinforce the specs an agent relied on so the next search ranks them higher.
 
+#### Decision recall (the *why* behind the code)
+
+wdpkr stores **architectural decisions** — authored ADR-style memory that captures why the code is the way it is. They're store-native (a `<namespace>--decision` namespace, not files) and surface in search two ways:
+
+- **`governed_by` on code results** — when a search returns a code file, any active decision whose `areas` glob matches that file is attached: `"governed_by": [{"path": "decision://0007", "title": "Half-up rounding", "status": "accepted"}]`. **Read the governing decision before changing the code it governs.**
+- **Direct hits** — decisions appear as their own results with `"source": "decision"` and a `decision://<id>` path. `--tap decision` searches only decisions; `--no-decisions` disables recall for a query.
+
+Record a decision when you make a non-obvious architectural choice, scoping it to the code it governs:
+
+```bash
+wdpkr decision add "Half-up rounding for commission" \
+  --context "..." --decision "..." --area 'src/finance/**' \
+  --tap notion --doc <page-id>   # optionally pull provenance from a tap
+```
+
+`--supersedes <id>` retires an old decision (kept, but excluded from active recall); `--overrides <id>` makes a narrow decision win over a broader one in overlapping areas. Manage with `wdpkr decision edit|rm|list`. See `docs/src/content/docs/guides/decisions.md`.
+
 #### When to use
 
 - **Conceptual questions** where you don't know what to grep for: "where does X live," "how is Y implemented"

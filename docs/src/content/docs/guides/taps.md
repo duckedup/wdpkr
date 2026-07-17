@@ -25,6 +25,14 @@ Two ingest models, depending on the source:
 - **Targeted, additive** (Notion): you name the exact documents to index, and
   nothing else is touched. Removal is explicit.
 
+:::note[Decisions are not a tap]
+[Decision recall](/guides/decisions/) also lives in a `<namespace>--decision`
+namespace and shows up in search with `source: "decision"`, but it isn't a tap:
+there's no external source to `index` from. Decisions are *authored* with
+`wdpkr decision add` (which can pull provenance snapshots *from* taps like
+Notion) and stored directly. `wdpkr index` never touches them.
+:::
+
 ## Configuring taps
 
 Taps live under a `taps:` list in `~/.config/wdpkr/config.yaml`. Omit the list

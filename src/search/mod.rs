@@ -47,6 +47,64 @@ pub struct FileResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub symbols: Vec<SymbolResult>,
+    /// Architectural decisions that govern this code file (L2 recall). Present
+    /// only on code results whose path matches an active decision's `areas`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub governed_by: Option<Vec<GoverningDecision>>,
+}
+
+/// A decision referenced from a code result because its `areas` glob matches the
+/// file. Compiled by the CLI from the decision registry and carried on
+/// [`SearchRun`]; `search` attaches these to matching code files.
+#[derive(Debug, Clone)]
+pub struct DecisionMeta {
+    pub uri: String,
+    pub title: String,
+    pub status: String,
+    /// Whether this decision participates in active recall (not superseded).
+    pub active: bool,
+    /// Compiled globs of the code areas this decision governs.
+    pub areas: globset::GlobSet,
+    /// URIs of decisions this one overrides (scope-override precedence).
+    pub overrides: Vec<String>,
+}
+
+/// A governing decision as surfaced in search output.
+#[derive(Debug, Clone, Serialize)]
+pub struct GoverningDecision {
+    pub path: String,
+    pub title: String,
+    pub status: String,
+}
+
+/// Compile decision registry entries into search-layer [`DecisionMeta`] (area
+/// globs + override URIs), keeping glob/registry parsing in one place. Used by
+/// the CLI to feed [`SearchRun::with_decisions`].
+pub fn compile_decisions(reg: &crate::decision::DecisionRegistry) -> Result<Vec<DecisionMeta>> {
+    reg.decisions
+        .iter()
+        .map(|d| {
+            let mut builder = globset::GlobSetBuilder::new();
+            for area in &d.areas {
+                builder.add(globset::Glob::new(area).with_context(|| {
+                    format!("decision {} has invalid area glob '{area}'", d.id)
+                })?);
+            }
+            let areas = builder.build().context("compiling decision area globs")?;
+            Ok(DecisionMeta {
+                uri: d.uri(),
+                title: d.title.clone(),
+                status: d.status.as_str().to_string(),
+                active: d.status.is_active(),
+                areas,
+                overrides: d
+                    .overrides
+                    .iter()
+                    .map(|id| crate::decision::decision_uri(*id))
+                    .collect(),
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +131,9 @@ pub struct SearchRun {
     /// Current unix seconds, used to age documents for decay. `0` disables the
     /// age effect (decay configs are also disabled by default).
     now: i64,
+    /// Compiled decision registry (L2). Empty disables decision behavior:
+    /// governed_by attach and superseded-result filtering.
+    decisions: Vec<DecisionMeta>,
 }
 
 impl SearchRun {
@@ -87,6 +148,7 @@ impl SearchRun {
             store,
             namespaces: vec![(namespace, None, DecayConfig::default())],
             now: 0,
+            decisions: Vec::new(),
         }
     }
 
@@ -106,6 +168,7 @@ impl SearchRun {
                 .map(|(ns, src)| (ns, src, DecayConfig::default()))
                 .collect(),
             now: 0,
+            decisions: Vec::new(),
         }
     }
 
@@ -122,7 +185,16 @@ impl SearchRun {
             store,
             namespaces,
             now,
+            decisions: Vec::new(),
         }
+    }
+
+    /// Attach a compiled decision registry (L2 recall). When non-empty, search
+    /// filters out superseded-decision results and attaches `governed_by` to
+    /// code files whose path matches an active decision's areas.
+    pub fn with_decisions(mut self, decisions: Vec<DecisionMeta>) -> Self {
+        self.decisions = decisions;
+        self
     }
 
     pub async fn run(&self, params: &SearchParams) -> Result<SearchReport> {
@@ -206,7 +278,7 @@ impl SearchRun {
         }
 
         // 4. Group into file → symbols tiered structure
-        let results = group_results_multi(&all_results, params, glob_set.as_ref());
+        let results = group_results_multi(&all_results, params, glob_set.as_ref(), &self.decisions);
 
         Ok(SearchReport {
             query: params.query.clone(),
@@ -237,6 +309,7 @@ fn group_results_multi(
     results: &[(SearchResult, Option<String>)],
     params: &SearchParams,
     glob_set: Option<&globset::GlobSet>,
+    decisions: &[DecisionMeta],
 ) -> Vec<FileResult> {
     let mut file_results: Vec<(&SearchResult, Option<&String>)> = Vec::new();
     let mut symbols_by_file: HashMap<&str, Vec<&SearchResult>> = HashMap::new();
@@ -255,6 +328,18 @@ fn group_results_multi(
 
     if let Some(gs) = glob_set {
         file_results.retain(|(r, _)| gs.is_match(&r.file_path));
+    }
+
+    // Drop superseded/deprecated decision results from active recall (they stay
+    // in the store, walkable via links). Filter before truncation so they don't
+    // occupy top_k slots.
+    if decisions.iter().any(|d| !d.active) {
+        let inactive: std::collections::HashSet<&str> = decisions
+            .iter()
+            .filter(|d| !d.active)
+            .map(|d| d.uri.as_str())
+            .collect();
+        file_results.retain(|(r, _)| !inactive.contains(r.file_path.as_str()));
     }
 
     // Re-sort by score descending across all namespaces.
@@ -286,13 +371,44 @@ fn group_results_multi(
                     .collect()
             };
 
+            // L2: attach governing decisions to code results (source == None).
+            let governed_by = if source.is_none() {
+                let g = governing_for(&file.file_path, decisions);
+                (!g.is_empty()).then_some(g)
+            } else {
+                None
+            };
+
             FileResult {
                 path: file.file_path.clone(),
                 score: file.score,
                 summary: Some(file.summary.clone()),
                 source: source.cloned(),
                 symbols,
+                governed_by,
             }
+        })
+        .collect()
+}
+
+/// Active decisions whose `areas` match `path`, with scope-override applied: a
+/// decision overridden by another matching decision is dropped.
+fn governing_for(path: &str, decisions: &[DecisionMeta]) -> Vec<GoverningDecision> {
+    let matched: Vec<&DecisionMeta> = decisions
+        .iter()
+        .filter(|d| d.active && d.areas.is_match(path))
+        .collect();
+    let overridden: std::collections::HashSet<&str> = matched
+        .iter()
+        .flat_map(|d| d.overrides.iter().map(String::as_str))
+        .collect();
+    matched
+        .iter()
+        .filter(|d| !overridden.contains(d.uri.as_str()))
+        .map(|d| GoverningDecision {
+            path: d.uri.clone(),
+            title: d.title.clone(),
+            status: d.status.clone(),
         })
         .collect()
 }
@@ -940,6 +1056,172 @@ mod tests {
             .await
             .unwrap();
         store
+    }
+
+    // ── decision recall (L1/L2) ─────────────────────────────────────
+
+    fn globset(patterns: &[&str]) -> globset::GlobSet {
+        let mut b = globset::GlobSetBuilder::new();
+        for p in patterns {
+            b.add(globset::Glob::new(p).unwrap());
+        }
+        b.build().unwrap()
+    }
+
+    fn decision_meta(uri: &str, areas: &[&str], active: bool, overrides: &[&str]) -> DecisionMeta {
+        DecisionMeta {
+            uri: uri.into(),
+            title: format!("decision {uri}"),
+            status: if active { "accepted" } else { "superseded" }.into(),
+            active,
+            areas: globset(areas),
+            overrides: overrides.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn governed_by_attaches_to_in_area_code() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let d = decision_meta("decision://0001", &["src/finance/**"], true, &[]);
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"))
+            .with_decisions(vec![d]);
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        let commission = report
+            .results
+            .iter()
+            .find(|r| r.path == "src/finance/commission.rs")
+            .expect("commission file present");
+        let gov = commission
+            .governed_by
+            .as_ref()
+            .expect("governed_by attached");
+        assert_eq!(gov.len(), 1);
+        assert_eq!(gov[0].path, "decision://0001");
+
+        // A file outside the area gets no governed_by.
+        if let Some(auth) = report
+            .results
+            .iter()
+            .find(|r| r.path == "src/auth/login.rs")
+        {
+            assert!(auth.governed_by.is_none());
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn scope_override_drops_overridden_decision() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        // Broad decision 0001 governs src/**; narrow 0002 governs src/finance/**
+        // and overrides 0001. Only 0002 should attach to the commission file.
+        let broad = decision_meta("decision://0001", &["src/**"], true, &[]);
+        let narrow = decision_meta(
+            "decision://0002",
+            &["src/finance/**"],
+            true,
+            &["decision://0001"],
+        );
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"))
+            .with_decisions(vec![broad, narrow]);
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        let commission = report
+            .results
+            .iter()
+            .find(|r| r.path == "src/finance/commission.rs")
+            .unwrap();
+        let gov = commission.governed_by.as_ref().unwrap();
+        assert_eq!(gov.len(), 1, "override should drop the broad decision");
+        assert_eq!(gov[0].path, "decision://0002");
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn superseded_decision_result_excluded() {
+        // A decision doc in the namespace whose registry status is superseded
+        // must not appear in active results.
+        let store = MockVectorStore::new();
+        let ns = Namespace::from("test");
+        store.create_namespace(&ns, 3).await.unwrap();
+        let mk = |id: &str, path: &str| VectorDocument {
+            id: id.into(),
+            vector: vec![1.0, 0.0, 0.0],
+            summary: format!("doc {id}"),
+            file_path: path.into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: None,
+            content_hash: None,
+            calls: None,
+            called_by: None,
+            last_used_at: None,
+        };
+        store
+            .upsert(
+                &ns,
+                &[mk("d1", "decision://0001"), mk("d2", "decision://0002")],
+            )
+            .await
+            .unwrap();
+
+        let mut embedder = MockEmbedder::new(3);
+        embedder.set_override("q", vec![1.0, 0.0, 0.0]);
+
+        let active = decision_meta("decision://0001", &[], true, &[]);
+        let superseded = decision_meta("decision://0002", &[], false, &[]);
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), ns)
+            .with_decisions(vec![active, superseded]);
+
+        let report = search
+            .run(&SearchParams {
+                query: "q".into(),
+                top_k: 5,
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        let paths: Vec<&str> = report.results.iter().map(|r| r.path.as_str()).collect();
+        assert!(
+            paths.contains(&"decision://0001"),
+            "active decision present"
+        );
+        assert!(
+            !paths.contains(&"decision://0002"),
+            "superseded decision must be excluded"
+        );
     }
 
     #[cfg_attr(miri, ignore)]
