@@ -700,6 +700,14 @@ impl VectorStore for ArcStore {
     async fn delete_by_glob(&self, ns: &Namespace, pattern: &str) -> anyhow::Result<usize> {
         self.0.delete_by_glob(ns, pattern).await
     }
+    async fn touch_by_file(
+        &self,
+        ns: &Namespace,
+        file_path: &str,
+        ts: i64,
+    ) -> anyhow::Result<usize> {
+        self.0.touch_by_file(ns, file_path, ts).await
+    }
     async fn get_content_hashes(
         &self,
         ns: &Namespace,

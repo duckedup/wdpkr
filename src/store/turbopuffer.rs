@@ -272,6 +272,51 @@ impl VectorStore for TurbopufferStore {
         Ok(count)
     }
 
+    async fn touch_by_file(&self, ns: &Namespace, file_path: &str, ts: i64) -> Result<usize> {
+        let url = format!("{}/query", self.ns_url(ns));
+        // Find the ids of all rows for this file_path (doc + section children).
+        let query = QueryRequest {
+            filters: Some(serde_json::json!(["file_path", "Eq", file_path])),
+            include_attributes: Some(serde_json::json!(["file_path"])),
+            limit: Some(10_000),
+            ..Default::default()
+        };
+        let resp = self.post_json(&url, &query).await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            bail!("touch_by_file query failed: {err}");
+        }
+        let query_resp: QueryResponse = resp.json().await.context("parsing touch query")?;
+        let ids: Vec<String> = query_resp
+            .rows
+            .into_iter()
+            .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        // Patch only `last_used_at` — vectors and other attributes are preserved.
+        let patch_rows: Vec<HashMap<String, serde_json::Value>> = ids
+            .iter()
+            .map(|id| {
+                let mut row = HashMap::new();
+                row.insert("id".to_string(), serde_json::json!(id));
+                row.insert("last_used_at".to_string(), serde_json::json!(ts));
+                row
+            })
+            .collect();
+        let body = WriteRequest {
+            patch_rows: Some(patch_rows),
+            ..Default::default()
+        };
+        let resp = self.post_json(&self.ns_url(ns), &body).await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            bail!("touch_by_file patch failed: {err}");
+        }
+        Ok(ids.len())
+    }
+
     async fn get_content_hashes(&self, ns: &Namespace) -> Result<HashMap<String, String>> {
         let url = format!("{}/query", self.ns_url(ns));
 
@@ -505,6 +550,9 @@ fn doc_to_row(doc: &VectorDocument) -> HashMap<String, serde_json::Value> {
     if let Some(ref called_by) = doc.called_by {
         row.insert("called_by".into(), serde_json::json!(called_by));
     }
+    if let Some(ts) = doc.last_used_at {
+        row.insert("last_used_at".into(), serde_json::json!(ts));
+    }
     row
 }
 
@@ -597,6 +645,7 @@ fn row_to_document(row: HashMap<String, serde_json::Value>) -> Result<VectorDocu
         content_hash: get_str("content_hash"),
         calls: get_string_vec("calls"),
         called_by: get_string_vec("called_by"),
+        last_used_at: row.get("last_used_at").and_then(|v| v.as_i64()),
     })
 }
 
@@ -638,6 +687,7 @@ fn row_to_search_result(
         language: get_str("language"),
         calls: get_string_vec("calls"),
         called_by: get_string_vec("called_by"),
+        last_used_at: row.get("last_used_at").and_then(|v| v.as_i64()),
     })
 }
 
@@ -647,6 +697,10 @@ fn row_to_search_result(
 struct WriteRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     upsert_rows: Option<Vec<HashMap<String, serde_json::Value>>>,
+    /// Row-based partial update: only the listed keys are written, the vector
+    /// and other attributes are preserved. Used by `touch_by_file`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    patch_rows: Option<Vec<HashMap<String, serde_json::Value>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     deletes: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -749,6 +803,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["id"], "test-1");
@@ -776,6 +831,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row["symbol_name"], "process");
@@ -800,6 +856,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         let body = WriteRequest {
             upsert_rows: Some(vec![doc_to_row(&doc)]),
@@ -1300,6 +1357,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         }
     }
 
@@ -1368,6 +1426,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 10); // id, vector, summary, file_path, chunk_kind + 5 optional
@@ -1396,6 +1455,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         let row = doc_to_row(&doc);
         assert_eq!(row.len(), 5); // id, vector, summary, file_path, chunk_kind

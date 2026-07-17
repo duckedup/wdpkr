@@ -239,6 +239,15 @@ impl IndexRun {
 
             resolve_call_edges(&mut tap_documents);
 
+            // Stamp the index time so per-tap search decay has a baseline.
+            // Changed/new docs get "now"; unchanged docs were hash-skipped and
+            // keep their prior timestamp. (--skip-summaries re-upserts docs as
+            // read, preserving last_used_at, so it doesn't reset decay.)
+            let now = now_unix_secs();
+            for doc in &mut tap_documents {
+                doc.last_used_at = Some(now);
+            }
+
             let stats = self.store.upsert(&ns, &tap_documents).await?;
             total_upserted += stats.upserted;
 
@@ -346,6 +355,15 @@ pub fn resolve_call_edges(documents: &mut [VectorDocument]) {
     }
 }
 
+/// Current wall-clock time in unix seconds. Used to stamp `last_used_at` on
+/// freshly indexed documents (the baseline for per-tap search decay).
+pub fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub fn resolve_namespace(config: &crate::config::Config) -> Result<Namespace> {
     let ns = &config.indexer.namespace;
     if ns.is_empty() {
@@ -380,6 +398,7 @@ mod tests {
             content_hash: None,
             calls: Some(calls.into_iter().map(String::from).collect()),
             called_by: None,
+            last_used_at: None,
         }
     }
 
@@ -556,6 +575,7 @@ mod tests {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         };
         store
             .upsert(&Namespace::from("test"), &[doc])

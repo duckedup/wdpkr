@@ -44,6 +44,7 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         },
         VectorDocument {
             id: "s-release".into(),
@@ -59,6 +60,7 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         },
         VectorDocument {
             id: "s-refund".into(),
@@ -74,6 +76,7 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         },
         VectorDocument {
             id: "f-users".into(),
@@ -89,6 +92,7 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         },
         VectorDocument {
             id: "s-create-user".into(),
@@ -104,6 +108,7 @@ async fn seeded_env() -> (MockVectorStore, MockEmbedder) {
             content_hash: None,
             calls: None,
             called_by: None,
+            last_used_at: None,
         },
     ];
 

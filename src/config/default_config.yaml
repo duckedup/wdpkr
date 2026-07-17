@@ -47,6 +47,12 @@ indexer:
 #       include_sections: true          # per-heading section children (default)
 #       # notion_version: "2026-03-11"  # Notion-Version header (default)
 #       # api_key_env: NOTION_API_KEY   # env var holding the integration token
+#       # Per-tap search decay (opt-in): stale docs rank lower over time but
+#       # never below `floor`. `wdpkr reinforce notion://<id>` refreshes a doc.
+#       decay:
+#         enabled: true
+#         half_life_days: 90            # score halves every 90 days unused
+#         floor: 0.4                    # never decays below 0.4x its raw score
 #     # Set the token via env, not this file: export NOTION_API_KEY=secret_...
 #     # Share each page with your Notion integration so the API can read it.
 #     # Remove a stale spec: wdpkr delete --tap notion "notion://<id>*"

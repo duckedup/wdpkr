@@ -342,6 +342,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
             VectorDocument {
                 id: "f-lib".into(),
@@ -357,6 +358,7 @@ mod tests {
                 content_hash: None,
                 calls: None,
                 called_by: None,
+                last_used_at: None,
             },
         ];
         store.upsert(&Namespace::from("test"), &docs).await.unwrap();
