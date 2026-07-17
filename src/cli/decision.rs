@@ -537,6 +537,9 @@ mod tests {
         assert!(parse_status(Some("nope")).is_err());
     }
 
+    // Ignored under Miri: the blank-author path falls through to
+    // `git_user_name`, which spawns a `git` subprocess (unsupported by Miri).
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn resolve_author_prefers_explicit() {
         assert_eq!(resolve_author(Some("Grace".into())), "Grace");

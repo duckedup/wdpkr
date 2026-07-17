@@ -123,6 +123,7 @@ fn params() -> SearchParams {
     }
 }
 
+#[cfg_attr(miri, ignore)]
 #[tokio::test]
 async fn decision_recall_end_to_end() {
     // ── Author decision 1 governing src/finance/** ──
