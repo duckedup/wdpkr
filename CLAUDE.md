@@ -76,11 +76,13 @@ Rust 1.96+ required (pinned via `rust-toolchain.toml`). Edition 2024.
 
 **Do NOT ignore** tests that use mock implementations (`MockEmbedder`, `MockVectorStore`, `MockSummarizer`) or the pure-Rust nidus store's conversion helpers — these run under Miri. (nidus's store *methods*, however, go through a tokio runtime, so those tests still need the tokio ignore above.)
 
-Miri runs `cargo miri test`: wdpkr is pure Rust (the local store is the
-pure-Rust `nidus` crate — no FFI, no bundled C/C++), so Miri builds the whole
-crate. Tests needing OS-level FFI carry `#[cfg_attr(miri, ignore)]`. Miri runs in
-CI as a separate job. If nightly breaks Miri temporarily, the CI job will fail but
-won't block the main `check` job.
+Miri runs `cargo miri nextest run` (via [nextest](https://nexte.st/), which
+parallelizes tests across cores — much faster wall time than the serial
+`cargo miri test`; install with `cargo install cargo-nextest` for local runs).
+wdpkr is pure Rust (the local store is the pure-Rust `nidus` crate — no FFI, no
+bundled C/C++), so Miri builds the whole crate. Tests needing OS-level FFI carry
+`#[cfg_attr(miri, ignore)]`. Miri runs in CI as a separate job. If nightly breaks
+Miri temporarily, the CI job will fail but won't block the main `check` job.
 
 ## Architecture Overview
 

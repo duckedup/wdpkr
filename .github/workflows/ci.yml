@@ -106,9 +106,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-miri-
 
+      # nextest runs each test in its own process, so Miri fans out across all
+      # runner cores instead of interpreting tests ~serially. Big wall-time win.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Test with Miri
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks"
         # wdpkr is pure Rust (no FFI), so Miri builds the whole crate. Tests
-        # needing OS-level FFI carry #[cfg_attr(miri, ignore)].
-        run: cargo miri test
+        # needing OS-level FFI carry #[cfg_attr(miri, ignore)]. nextest
+        # parallelizes execution across cores (doctests, of which we have none,
+        # are not run by nextest).
+        run: cargo miri nextest run

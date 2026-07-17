@@ -54,7 +54,7 @@ test-mod MOD:
 # need OS-level FFI (tokio reactor, tree-sitter, subprocesses) carry
 # #[cfg_attr(miri, ignore)]; pure-Rust tests run.
 miri:
-    MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks" cargo +nightly miri test
+    MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks" cargo +nightly miri nextest run
 
 # Pre-commit / pre-PR checks: format clean, no clippy warnings, tests green
 ci: fmt-check lint test
