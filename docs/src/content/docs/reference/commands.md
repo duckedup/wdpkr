@@ -14,6 +14,7 @@ wdpkr <command> [options]
 | --- | --- |
 | [`search`](#search) | Conceptual search — returns tiered JSON |
 | [`index`](#index) | Build or refresh the index (full or incremental) |
+| [`reinforce`](#reinforce) | Mark documents as freshly used so decay stops sinking them |
 | [`delete`](#delete) | Remove vectors from the index by path glob |
 | [`init`](#init) | Set up wdpkr for a repository |
 | [`config`](#config) | Manage configuration |
@@ -38,13 +39,15 @@ wdpkr search "auth flow" --scope src/auth/ -k 10
 | `--no-symbols` | off | File-level results only, omit symbol nesting |
 | `--scope <path>` | — | Limit search to subtree(s); repeatable |
 | `--filter <glob>` | — | Glob filter on result paths; repeatable (OR logic) |
-| `--provider <name>` | all | Limit search to these tap sources (e.g. `files`, `linear`); repeatable |
+| `--tap <name>` | all | Limit search to these tap sources (e.g. `files`, `linear`, `notion`); repeatable. `--provider` is a deprecated alias |
 | `--terse` | off | Compact output: paths + one-sentence summaries |
 | `--pretty` | off | Human-readable output instead of JSON |
 
 Results from a non-`files` tap carry a `source` field (e.g. `"source": "linear"`)
 and a scheme-prefixed `path` (e.g. `linear://ENG-123`). See
-[Taps](/guides/taps/) for indexing data sources beyond code.
+[Taps](/guides/taps/) for indexing data sources beyond code, and
+[Decay and reinforce](/guides/taps/#decay-and-reinforce) for how per-tap age
+affects ranking.
 
 ## `index`
 
@@ -56,6 +59,7 @@ wdpkr index              # incremental
 wdpkr index --full       # rebuild everything
 wdpkr index --dry-run    # estimate cost, no API calls
 wdpkr index --tap linear # index only the configured Linear tap
+wdpkr index --tap notion --doc <page-id-or-url>  # index specific Notion pages
 ```
 
 | Flag | Default | Description |
@@ -67,18 +71,39 @@ wdpkr index --tap linear # index only the configured Linear tap
 | `--max-cost <usd>` | — | Abort if estimated remaining cost exceeds this cap |
 | `--skip-summaries` | off | Re-chunk and rebuild call-graph edges with zero API calls, reusing existing vectors |
 | `--tap <name>` | all | Run only this configured tap |
+| `--doc <id-or-url>` | — | Target document(s) for a targeted tap (the Notion tap); repeatable. Additive — only the named documents are (re)indexed |
 
-## `delete`
+## `reinforce`
 
-Remove indexed vectors whose file paths match a glob.
+Mark one or more documents as freshly used so per-tap [decay](/guides/taps/#decay-and-reinforce)
+stops sinking them in the rankings. Bumps each document's `last_used_at` to now
+— a cheap metadata write, no re-embedding.
 
 ```bash
-wdpkr delete "src/legacy/**"
+wdpkr reinforce notion://<page-id>
+wdpkr reinforce notion://<page-id> linear://ENG-123   # several at once
 ```
 
 | Argument | Description |
 | --- | --- |
-| `<pattern>` | Glob matching file paths to remove from the index |
+| `<id>...` | One or more document ids (a result's `path`). The tap is inferred from the URI scheme; a bare path targets the `files` namespace |
+
+Reinforce the specs an agent actually relied on so the next search ranks them
+higher. Only meaningful for taps with decay enabled.
+
+## `delete`
+
+Remove indexed vectors whose paths match a glob.
+
+```bash
+wdpkr delete "src/legacy/**"                  # from the files namespace
+wdpkr delete --tap notion "notion://<id>*"    # from a tap's namespace
+```
+
+| Flag / Argument | Default | Description |
+| --- | --- | --- |
+| `<pattern>` | *(required)* | Glob matching paths to remove. For non-`files` taps the paths are tap URIs (e.g. `notion://<id>*`) |
+| `--tap <name>` | files | Delete from this tap's namespace instead of the base (files) namespace |
 
 ## `init`
 

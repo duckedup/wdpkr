@@ -108,6 +108,7 @@ Provider adapters live in one place (`ai_providers/`); the `embed` and `summariz
 
 ## Conventions & Patterns
 
+- **Docs travel with features**: any user-facing change (a new command, flag, tap, config key, or behavior) MUST update the docs site under `docs/` in the same PR. The site is Astro + Starlight — content lives in `docs/src/content/docs/` (guides in `guides/`, reference in `reference/`), and new pages must be wired into the sidebar in `docs/astro.config.mjs`. Update the matching page (`guides/taps.md`, `reference/commands.md`, `guides/configuration.md`, etc.); a feature isn't done until its docs are.
 - **Trait-first design**: VectorStore, Embedder, Summarizer, Chunker are all traits with mock + real implementations
 - **Config via `env_or` pattern**: `env_or_resolved(KEY, file_or_resolved(file_value, default))` — every field has a known env var, file key, and hardcoded default
 - **Tests are mock-based**: no live API calls in the test suite. Integration tests create temp git repos with fixture source files
