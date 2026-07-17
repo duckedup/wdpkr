@@ -5,6 +5,10 @@
 //! persist the registry in namespace metadata), seed a code file, then run a
 //! multi-namespace search and assert L1 (decision hit) and L2 (`governed_by`
 //! attach), plus superseded exclusion after a superseding decision is added.
+//!
+//! The single test is a `#[tokio::test]` (runtime FFI), so it can't run under
+//! Miri anyway — skip compiling the whole binary there to keep Miri fast.
+#![cfg(not(miri))]
 
 use wdpkr::config::DecayConfig;
 use wdpkr::decision::{DecisionEntry, DecisionRegistry, DecisionStatus, REGISTRY_META_KEY};
