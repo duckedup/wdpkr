@@ -54,6 +54,7 @@ export default defineConfig({
             { label: "Configuration", link: "/guides/configuration/" },
             { label: "Providers", link: "/guides/providers/" },
             { label: "Taps", link: "/guides/taps/" },
+            { label: "Decision recall", link: "/guides/decisions/" },
             { label: "Storage", link: "/guides/storage/" },
           ],
         },

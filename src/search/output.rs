@@ -35,6 +35,7 @@ pub fn render_json(report: &SearchReport, terse: bool) -> Result<String> {
                         ..s.clone()
                     })
                     .collect(),
+                governed_by: f.governed_by.clone(),
             })
             .collect(),
     };
@@ -88,11 +89,35 @@ fn render_file_terse(out: &mut String, file: &FileResult) {
     let score_display = score_text.if_supports_color(Stream::Stdout, |s| s.style(ss));
     writeln!(out, "{path} {score_display}").unwrap();
 
+    render_governed_by(out, file);
+
     let count = file.symbols.len();
     for (i, sym) in file.symbols.iter().enumerate() {
         let is_last = i == count - 1;
         render_symbol_terse(out, sym, is_last);
     }
+}
+
+/// Render the `governed_by` decisions for a code file, if any.
+fn render_governed_by(out: &mut String, file: &FileResult) {
+    let Some(ref decisions) = file.governed_by else {
+        return;
+    };
+    if decisions.is_empty() {
+        return;
+    }
+    let label = "governed by:".if_supports_color(Stream::Stdout, |s| s.magenta());
+    let refs = decisions
+        .iter()
+        .map(|d| format!("{} ({})", d.path, d.title))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        out,
+        "  {label} {}",
+        refs.if_supports_color(Stream::Stdout, |s| s.dimmed())
+    )
+    .unwrap();
 }
 
 fn render_symbol_terse(out: &mut String, sym: &SymbolResult, is_last: bool) {
@@ -168,6 +193,8 @@ fn render_file(out: &mut String, file: &FileResult) {
         .unwrap();
     }
 
+    render_governed_by(out, file);
+
     let count = file.symbols.len();
     for (i, sym) in file.symbols.iter().enumerate() {
         let is_last = i == count - 1;
@@ -230,6 +257,7 @@ mod tests {
                     score: 0.87,
                     summary: Some("Commission payment release service".into()),
                     source: None,
+                    governed_by: None,
                     symbols: vec![
                         SymbolResult {
                             name: "release_payment".into(),
@@ -256,6 +284,7 @@ mod tests {
                     score: 0.72,
                     summary: Some("Authentication and session management".into()),
                     source: None,
+                    governed_by: None,
                     symbols: vec![SymbolResult {
                         name: "authenticate".into(),
                         kind: "function".into(),
@@ -354,6 +383,7 @@ mod tests {
                 score: 0.5,
                 summary: Some("A file".into()),
                 source: None,
+                governed_by: None,
                 symbols: vec![SymbolResult {
                     name: "only_one".into(),
                     kind: "function".into(),
@@ -398,6 +428,7 @@ mod tests {
                 score: 0.9,
                 summary: Some("File summary here.".into()),
                 source: None,
+                governed_by: None,
                 symbols: vec![SymbolResult {
                     name: "func".into(),
                     kind: "function".into(),

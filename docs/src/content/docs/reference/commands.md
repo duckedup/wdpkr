@@ -19,6 +19,7 @@ wdpkr <command> [options]
 | [`init`](#init) | Set up wdpkr for a repository |
 | [`config`](#config) | Manage configuration |
 | [`eval`](#eval) | Measure search quality and compression |
+| [`decision`](#decision) | Record and manage architectural decisions (decision recall) |
 
 ## `search`
 
@@ -39,15 +40,23 @@ wdpkr search "auth flow" --scope src/auth/ -k 10
 | `--no-symbols` | off | File-level results only, omit symbol nesting |
 | `--scope <path>` | — | Limit search to subtree(s); repeatable |
 | `--filter <glob>` | — | Glob filter on result paths; repeatable (OR logic) |
-| `--tap <name>` | all | Limit search to these tap sources (e.g. `files`, `linear`, `notion`); repeatable. `--provider` is a deprecated alias |
+| `--tap <name>` | all | Limit search to these tap sources (e.g. `files`, `linear`, `notion`, `decision`); repeatable. `--provider` is a deprecated alias |
 | `--terse` | off | Compact output: paths + one-sentence summaries |
 | `--pretty` | off | Human-readable output instead of JSON |
+| `--no-decisions` | off | Disable decision recall: don't search decisions or attach `governed_by` |
 
 Results from a non-`files` tap carry a `source` field (e.g. `"source": "linear"`)
 and a scheme-prefixed `path` (e.g. `linear://ENG-123`). See
 [Taps](/guides/taps/) for indexing data sources beyond code, and
 [Decay and reinforce](/guides/taps/#decay-and-reinforce) for how per-tap age
 affects ranking.
+
+When [decisions](/guides/decisions/) exist, code results carry a `governed_by`
+array listing the architectural decisions whose `areas` match that file — so a
+search for the code also surfaces *why* it works the way it does. Decisions also
+appear as their own results (`"source": "decision"`, path `decision://<id>`).
+`--tap decision` searches only decisions; `--no-decisions` turns the whole
+feature off for a query.
 
 ## `index`
 
@@ -145,3 +154,57 @@ saves versus reading source directly.
 ```bash
 wdpkr eval
 ```
+
+## `decision`
+
+Record and manage **store-native architectural decisions** — authored memory
+that captures *why* the code is the way it is, surfaced back in search. Decisions
+live in the store's `<namespace>--decision` namespace (not files on disk); their
+metadata rides in a registry inside that namespace. See
+[Decision recall](/guides/decisions/) for the full guide.
+
+```bash
+wdpkr decision add "Half-up rounding for commission" \
+  --context "Payouts were off by a cent" \
+  --decision "Round half up at 2 decimals" \
+  --area 'src/finance/**' \
+  --tap notion --doc <page-id-or-url> \
+  --supersedes 3
+wdpkr decision list
+wdpkr decision edit 7 --status deprecated
+wdpkr decision delete 4
+```
+
+### `decision add <title>`
+
+| Flag | Description |
+| --- | --- |
+| `<title>` | *(required)* Short title of the decision |
+| `--context <text>` | Why the decision was needed (Context section) |
+| `--decision <text>` | What was decided (Decision section) |
+| `--consequences <text>` | Resulting trade-offs (Consequences section) |
+| `--area <glob>` | Code path glob this decision governs; repeatable. Drives `governed_by` recall |
+| `--tap <name>` | Pull provenance snapshots from this configured tap (e.g. `notion`) |
+| `--doc <ref>` | Document ref(s) to pull from `--tap`; repeatable. Snapshot + source URI are recorded |
+| `--supersedes <id>` | Decision id(s) this one replaces (marks them superseded); repeatable |
+| `--overrides <id>` | Decision id(s) this one wins over in overlapping areas; repeatable |
+| `--relates-to <id>` | Related decision id(s); repeatable |
+| `--author <name>` | Author (defaults to `git config user.name`) |
+| `--status <status>` | `proposed` \| `accepted` \| `superseded` \| `deprecated` (default `accepted`) |
+
+### `decision edit <id>`
+
+Takes the same field flags as `add`; only the fields you pass change. `--area`,
+`--supersedes`, `--overrides`, and `--relates-to` *replace* their lists when
+given; `--tap`/`--doc` *append* new provenance. Content changes re-embed the
+decision.
+
+### `decision delete <id>...`
+
+Delete one or more decisions by id (aliased `rm`) — removes their vectors and
+registry entries and scrubs any dangling links (supersedes/overrides/relates-to)
+in other decisions. Mirrors the top-level [`delete`](#delete) verb.
+
+### `decision list`
+
+Print the decision registry as JSON (or `--pretty` for a human-readable table).

@@ -189,6 +189,7 @@ mod tests {
                 summary: Some("A file summary".into()),
                 source: None,
                 symbols: vec![],
+                governed_by: None,
             }],
         };
         let source = vec![("a.rs".into(), "x".repeat(4000))];
@@ -339,6 +340,7 @@ mod tests {
                     calls: None,
                     called_by: None,
                 }],
+                governed_by: None,
             }],
         };
         let source = vec![("a.rs".into(), "fn foo() {}\n".repeat(100))];

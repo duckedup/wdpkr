@@ -2,11 +2,12 @@ use anyhow::{Result, bail};
 use clap::Args;
 
 use crate::config::{Config, TapConfig};
+use crate::decision::DecisionRegistry;
 use crate::embed::build_embedder;
 use crate::indexer::resolve_namespace;
 use crate::search::output;
-use crate::search::{SearchParams, SearchRun};
-use crate::store::{Namespace, build_store};
+use crate::search::{DecisionMeta, SearchParams, SearchRun};
+use crate::store::{Namespace, VectorStore, build_store};
 use crate::tap::namespace_suffix;
 
 #[derive(Args, Debug)]
@@ -47,6 +48,10 @@ pub struct SearchArgs {
     /// Human-readable output instead of JSON
     #[arg(long)]
     pub pretty: bool,
+
+    /// Disable decision recall: don't search decisions or attach `governed_by`
+    #[arg(long)]
+    pub no_decisions: bool,
 }
 
 pub async fn run(args: SearchArgs) -> Result<()> {
@@ -67,26 +72,61 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         filters: args.filter.clone(),
     };
 
-    let selected_taps = select_taps(&config.taps, &args.tap)?;
-    let namespaces: Vec<(Namespace, Option<String>, crate::config::DecayConfig)> = selected_taps
+    // The decision namespace is store-native (not a configured tap). It is
+    // handled specially: `--tap decision` selects only it, an empty `--tap`
+    // includes it alongside code taps, and `--no-decisions` disables it.
+    let want_decision = !args.no_decisions
+        && (args.tap.is_empty() || args.tap.iter().any(|t| t == crate::decision::TAP_NAME));
+    let tap_names: Vec<String> = args
+        .tap
         .iter()
-        .map(|p| {
-            let ns = match namespace_suffix(&p.name) {
-                None => namespace.clone(),
-                Some(suffix) => Namespace::from(format!("{}{suffix}", namespace.as_str())),
-            };
-            let source = if p.name == "files" {
-                None
-            } else {
-                Some(p.name.clone())
-            };
-            let decay = p.decay()?;
-            Ok((ns, source, decay))
-        })
-        .collect::<Result<_>>()?;
+        .filter(|t| t.as_str() != crate::decision::TAP_NAME)
+        .cloned()
+        .collect();
+    // Only skip code taps when the user asked for decision(s) exclusively.
+    let only_decision = !args.tap.is_empty() && tap_names.is_empty();
+
+    let mut namespaces: Vec<(Namespace, Option<String>, crate::config::DecayConfig)> =
+        if only_decision {
+            Vec::new()
+        } else {
+            select_taps(&config.taps, &tap_names)?
+                .iter()
+                .map(|p| {
+                    let ns = match namespace_suffix(&p.name) {
+                        None => namespace.clone(),
+                        Some(suffix) => Namespace::from(format!("{}{suffix}", namespace.as_str())),
+                    };
+                    let source = if p.name == "files" {
+                        None
+                    } else {
+                        Some(p.name.clone())
+                    };
+                    let decay = p.decay()?;
+                    Ok((ns, source, decay))
+                })
+                .collect::<Result<_>>()?
+        };
+
+    // Load the decision registry once (drives L1 namespace inclusion, superseded
+    // filtering, and L2 governed_by attach).
+    let decision_ns = crate::cli::decision::decision_namespace(&namespace);
+    let decisions = if args.no_decisions {
+        Vec::new()
+    } else {
+        load_decisions(store.as_ref(), &decision_ns).await?
+    };
+    if want_decision {
+        namespaces.push((
+            decision_ns,
+            Some(crate::decision::TAP_NAME.to_string()),
+            crate::config::DecayConfig::default(),
+        ));
+    }
 
     let now = crate::indexer::now_unix_secs();
-    let search = SearchRun::new_multi_with_decay(embedder, store, namespaces, now);
+    let search =
+        SearchRun::new_multi_with_decay(embedder, store, namespaces, now).with_decisions(decisions);
     let report = search.run(&params).await?;
 
     let rendered = if args.pretty {
@@ -96,6 +136,20 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     };
     print!("{rendered}");
     Ok(())
+}
+
+/// Load and compile the decision registry from the decision namespace's
+/// metadata. Empty when the namespace or registry is absent.
+async fn load_decisions(store: &dyn VectorStore, ns: &Namespace) -> Result<Vec<DecisionMeta>> {
+    if !store.namespace_exists(ns).await? {
+        return Ok(Vec::new());
+    }
+    let meta = store.get_metadata(ns).await?;
+    let Some(json) = meta.extra.get(crate::decision::REGISTRY_META_KEY) else {
+        return Ok(Vec::new());
+    };
+    let reg = DecisionRegistry::from_json(json)?;
+    crate::search::compile_decisions(&reg)
 }
 
 /// Filter configured taps to those named in `--tap`. An empty `names`
@@ -161,6 +215,7 @@ mod tests {
             tap: vec![],
             terse: false,
             pretty: false,
+            no_decisions: false,
         };
         let params = SearchParams {
             query: args.query.clone(),
@@ -233,6 +288,7 @@ mod tests {
             tap: vec![],
             terse: false,
             pretty: false,
+            no_decisions: false,
         };
         let err = run(args).await.unwrap_err();
         assert!(

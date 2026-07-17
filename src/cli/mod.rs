@@ -1,4 +1,5 @@
 pub mod config;
+pub mod decision;
 pub mod delete;
 pub mod eval;
 pub mod index;
@@ -8,6 +9,7 @@ pub mod reinforce;
 pub mod search;
 
 pub use config::{ConfigArgs, ConfigCommand};
+pub use decision::DecisionArgs;
 pub use delete::DeleteArgs;
 pub use eval::EvalArgs;
 pub use index::IndexArgs;
@@ -53,6 +55,8 @@ pub enum Command {
     Init(InitArgs),
     /// Run evaluation suite to measure search quality and compression
     Eval(EvalArgs),
+    /// Record and manage store-native architectural decisions
+    Decision(DecisionArgs),
 }
 
 /// Dispatch to the appropriate subcommand handler.
@@ -65,6 +69,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Reinforce(args) => reinforce::run(args).await,
         Command::Init(args) => init::run(args).await,
         Command::Eval(args) => eval::run(args).await,
+        Command::Decision(args) => decision::run(args).await,
     }
 }
 
