@@ -44,7 +44,11 @@ pub const SOURCE_SCHEME: &str = "notion://";
 /// per-tap `decay` block consumed by search) are ignored.
 #[derive(Debug, Clone)]
 pub struct NotionTapSettings {
-    /// Name of the env var holding the Notion integration token.
+    /// Inline integration token from `settings.api_key`. Takes precedence over
+    /// `api_key_env` when set. Convenient for local config; keep the file private.
+    pub api_key: Option<String>,
+    /// Name of the env var holding the Notion integration token (fallback when
+    /// `api_key` is unset).
     pub api_key_env: String,
     /// `Notion-Version` header value.
     pub notion_version: String,
@@ -55,6 +59,7 @@ pub struct NotionTapSettings {
 impl Default for NotionTapSettings {
     fn default() -> Self {
         Self {
+            api_key: None,
             api_key_env: DEFAULT_API_KEY_ENV.to_string(),
             notion_version: DEFAULT_NOTION_VERSION.to_string(),
             include_sections: true,
@@ -65,6 +70,13 @@ impl Default for NotionTapSettings {
 impl NotionTapSettings {
     pub fn from_settings(settings: &HashMap<String, serde_yaml::Value>) -> Result<Self> {
         let mut out = Self::default();
+        if let Some(v) = settings.get("api_key") {
+            out.api_key = Some(
+                v.as_str()
+                    .ok_or_else(|| anyhow!("notion tap: 'api_key' must be a string"))?
+                    .to_string(),
+            );
+        }
         if let Some(v) = settings.get("api_key_env") {
             out.api_key_env = v
                 .as_str()
@@ -202,12 +214,16 @@ impl NotionTap {
         targets: Vec<String>,
     ) -> Result<Self> {
         let settings = NotionTapSettings::from_settings(settings)?;
-        let api_key = std::env::var(&settings.api_key_env).map_err(|_| {
-            anyhow!(
-                "Notion API key not set: export {} (or set the notion tap's settings.api_key_env)",
-                settings.api_key_env
-            )
-        })?;
+        let api_key = match settings.api_key.as_deref() {
+            Some(k) if !k.is_empty() => k.to_string(),
+            _ => std::env::var(&settings.api_key_env).map_err(|_| {
+                anyhow!(
+                    "Notion API key not set: put it in the notion tap's settings.api_key, \
+                     or export {}",
+                    settings.api_key_env
+                )
+            })?,
+        };
         let fetcher = NotionApiFetcher {
             client: reqwest::Client::new(),
             api_key,
@@ -571,9 +587,21 @@ mod tests {
     #[test]
     fn settings_defaults() {
         let s = NotionTapSettings::from_settings(&HashMap::new()).unwrap();
+        assert!(s.api_key.is_none());
         assert_eq!(s.api_key_env, "NOTION_API_KEY");
         assert_eq!(s.notion_version, DEFAULT_NOTION_VERSION);
         assert!(s.include_sections);
+    }
+
+    #[test]
+    fn settings_parses_inline_api_key() {
+        let mut m = HashMap::new();
+        m.insert(
+            "api_key".into(),
+            serde_yaml::Value::String("secret_abc".into()),
+        );
+        let s = NotionTapSettings::from_settings(&m).unwrap();
+        assert_eq!(s.api_key.as_deref(), Some("secret_abc"));
     }
 
     #[test]

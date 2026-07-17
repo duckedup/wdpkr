@@ -4,6 +4,7 @@ pub mod cost;
 pub mod docstring;
 pub mod git;
 pub mod pipeline;
+pub mod prose;
 pub mod walk;
 
 use std::sync::Arc;
