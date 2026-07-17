@@ -34,10 +34,6 @@ pub const TAP_NAME: &str = "decision";
 /// `NamespaceMetadata.extra`.
 pub const REGISTRY_META_KEY: &str = "decisions";
 
-/// Cap on a single pulled source snapshot (chars), bounding the size of the
-/// registry stored in namespace metadata while keeping enough text for recall.
-pub const MAX_SNAPSHOT_CHARS: usize = 8_000;
-
 /// The stable URI for a decision id, e.g. `decision://0007`.
 pub fn decision_uri(id: u32) -> String {
     format!("{SOURCE_SCHEME}{id:04}")
@@ -291,15 +287,6 @@ impl DecisionRegistry {
     }
 }
 
-/// Truncate a pulled snapshot to [`MAX_SNAPSHOT_CHARS`] on a char boundary.
-pub fn cap_snapshot(text: &str) -> String {
-    if text.chars().count() <= MAX_SNAPSHOT_CHARS {
-        return text.to_string();
-    }
-    let capped: String = text.chars().take(MAX_SNAPSHOT_CHARS).collect();
-    format!("{capped}\n…[truncated]")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,15 +449,5 @@ mod tests {
             a.to_source_item().content_hash,
             b.to_source_item().content_hash
         );
-    }
-
-    #[test]
-    fn cap_snapshot_truncates_long_text() {
-        let short = "hello";
-        assert_eq!(cap_snapshot(short), short);
-        let long: String = "a".repeat(MAX_SNAPSHOT_CHARS + 100);
-        let capped = cap_snapshot(&long);
-        assert!(capped.len() < long.len());
-        assert!(capped.ends_with("…[truncated]"));
     }
 }

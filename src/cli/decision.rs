@@ -14,7 +14,6 @@ use owo_colors::{OwoColorize, Stream};
 use crate::config::Config;
 use crate::decision::{
     DecisionEntry, DecisionRegistry, DecisionStatus, REGISTRY_META_KEY, SourceRef, TAP_NAME,
-    cap_snapshot,
 };
 use crate::embed::{Embedder, build_embedder, embedder_identity};
 use crate::indexer::pipeline::{EmbedMode, process_item};
@@ -512,7 +511,7 @@ async fn pull_from_tap(tap: &dyn Tap) -> Result<Vec<SourceRef>> {
         .into_iter()
         .map(|it| SourceRef {
             uri: it.source_path,
-            snapshot: cap_snapshot(&it.content),
+            snapshot: it.content,
         })
         .collect())
 }
