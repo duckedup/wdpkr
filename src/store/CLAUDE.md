@@ -55,6 +55,8 @@ All Turbopuffer requests MUST use the v2 API (`/v2/namespaces/{ns}`). Do NOT use
 
 Requesting a specific attribute name that doesn't exist in the namespace schema returns a 400 error. This happens when querying indexes built before a new field was added (e.g., `calls`/`called_by` on older indexes). Use `include_attributes: true` when you need all attributes and can't guarantee the schema has every column.
 
+The same schema strictness applies to **filters**: a filter (query *or* `delete_by_filter`) that references an attribute the namespace has never stored returns a 400 whose body contains `attribute not found` (e.g. ``filter error in key `file_path`: attribute not found``). A freshly-created namespace holds only the `__wdpkr_meta__` row, so `file_path`/`chunk_kind` don't exist until the first doc is upserted. `delete_by_file`/`delete_by_glob` therefore tolerate this specific error as a no-op (`is_missing_attribute_error`) — the rows they'd match cannot exist yet, so the delete-before-upsert on a first index must not fail. Only match this narrow substring; every other error (auth, rate-limit, namespace-not-found) must still surface.
+
 ### v2 query patterns
 
 ```rust

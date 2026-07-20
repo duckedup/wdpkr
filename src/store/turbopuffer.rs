@@ -240,6 +240,9 @@ impl VectorStore for TurbopufferStore {
         let resp = self.post_json(&self.ns_url(ns), &body).await?;
         if !resp.status().is_success() {
             let err = resp.text().await.unwrap_or_default();
+            if is_missing_attribute_error(&err) {
+                return Ok(());
+            }
             bail!("delete_by_file failed: {err}");
         }
         Ok(())
@@ -267,6 +270,9 @@ impl VectorStore for TurbopufferStore {
         let resp = self.post_json(&self.ns_url(ns), &body).await?;
         if !resp.status().is_success() {
             let err = resp.text().await.unwrap_or_default();
+            if is_missing_attribute_error(&err) {
+                return Ok(count);
+            }
             bail!("delete_by_glob failed: {err}");
         }
         Ok(count)
@@ -729,10 +735,44 @@ struct QueryResponse {
     rows: Vec<HashMap<String, serde_json::Value>>,
 }
 
+/// Turbopuffer rejects a filter that references an attribute the namespace has
+/// never stored. For a delete, that means the rows it would match cannot exist
+/// yet, so the delete is a no-op rather than a failure. Tolerating it lets the
+/// first index into a fresh namespace bootstrap, where the delete-before-upsert
+/// runs before any write has established the `file_path` attribute.
+fn is_missing_attribute_error(body: &str) -> bool {
+    body.contains("attribute not found")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{NidusConfig, TurbopufferConfig};
+
+    #[test]
+    fn missing_attribute_error_detected() {
+        // Real Turbopuffer 400 body for an `Eq` filter on an attribute the
+        // namespace has never stored (delete_by_file on a fresh namespace).
+        let eq_err =
+            r#"{"error":"filter error in key `file_path`: attribute not found","status":"error"}"#;
+        assert!(is_missing_attribute_error(eq_err));
+        // Same class of error for the `Glob` filter (delete_by_glob).
+        let glob_err = r#"{"error":"filter error in key `file_path`: attribute not found"}"#;
+        assert!(is_missing_attribute_error(glob_err));
+    }
+
+    #[test]
+    fn unrelated_errors_not_treated_as_missing_attribute() {
+        // Errors we must still surface as failures — never swallow these.
+        assert!(!is_missing_attribute_error(r#"{"error":"rate limited"}"#));
+        assert!(!is_missing_attribute_error(
+            r#"{"error":"unauthorized: invalid API key"}"#
+        ));
+        assert!(!is_missing_attribute_error(
+            r#"{"error":"namespace not found"}"#
+        ));
+        assert!(!is_missing_attribute_error(""));
+    }
 
     /// Build a turbopuffer `StoreConfig` with the given API key.
     fn tp_config(api_key: &str) -> StoreConfig {
