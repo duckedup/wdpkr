@@ -52,6 +52,12 @@ pub struct SearchArgs {
     /// Disable decision recall: don't search decisions or attach `governed_by`
     #[arg(long)]
     pub no_decisions: bool,
+
+    /// EXPERIMENTAL: split identifier-shaped queries before embedding, so
+    /// `getUserAccount` is searched as `get user account`. Off by default —
+    /// unproven, pending eval numbers.
+    #[arg(long)]
+    pub fold_identifiers: bool,
 }
 
 pub async fn run(args: SearchArgs) -> Result<()> {
@@ -125,8 +131,9 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     }
 
     let now = crate::indexer::now_unix_secs();
-    let search =
-        SearchRun::new_multi_with_decay(embedder, store, namespaces, now).with_decisions(decisions);
+    let search = SearchRun::new_multi_with_decay(embedder, store, namespaces, now)
+        .with_decisions(decisions)
+        .with_identifier_folding(args.fold_identifiers);
     let report = search.run(&params).await?;
 
     let rendered = if args.pretty {
@@ -216,6 +223,7 @@ mod tests {
             terse: false,
             pretty: false,
             no_decisions: false,
+            fold_identifiers: false,
         };
         let params = SearchParams {
             query: args.query.clone(),
@@ -289,6 +297,7 @@ mod tests {
             terse: false,
             pretty: false,
             no_decisions: false,
+            fold_identifiers: false,
         };
         let err = run(args).await.unwrap_err();
         assert!(

@@ -44,6 +44,18 @@ wdpkr search "auth flow" --scope src/auth/ -k 10
 | `--terse` | off | Compact output: paths + one-sentence summaries |
 | `--pretty` | off | Human-readable output instead of JSON |
 | `--no-decisions` | off | Disable decision recall: don't search decisions or attach `governed_by` |
+| `--fold-identifiers` | off | **Experimental.** Split identifier-shaped queries before embedding |
+
+### Identifier folding (experimental)
+
+wdpkr indexes natural-language summaries, but code searches are often typed as
+identifiers. `--fold-identifiers` splits those on case and separator boundaries
+before embedding, so `getUserAccount` is searched as `get user account` and
+`MAX_RETRY_COUNT` as `max retry count`. A plain-prose query is unaffected.
+
+This is **off by default and unproven** — one-sided normalization can hurt as
+easily as help. The flag exists so the two modes can be compared with
+[`wdpkr eval`](#eval); it will only become the default if the numbers justify it.
 
 Results from a non-`files` tap carry a `source` field (e.g. `"source": "linear"`)
 and a scheme-prefixed `path` (e.g. `linear://ENG-123`). See

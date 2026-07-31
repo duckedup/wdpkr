@@ -6,6 +6,7 @@
 //! report to stdout via [`output::render_json`] or [`output::render_pretty`].
 
 pub mod output;
+pub mod query;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -134,6 +135,9 @@ pub struct SearchRun {
     /// Compiled decision registry (L2). Empty disables decision behavior:
     /// governed_by attach and superseded-result filtering.
     decisions: Vec<DecisionMeta>,
+    /// Rewrite identifier-shaped queries into the register the index is written
+    /// in before embedding. Experimental, off by default — see [`self::query`].
+    fold_identifiers: bool,
 }
 
 impl SearchRun {
@@ -149,6 +153,7 @@ impl SearchRun {
             namespaces: vec![(namespace, None, DecayConfig::default())],
             now: 0,
             decisions: Vec::new(),
+            fold_identifiers: false,
         }
     }
 
@@ -169,6 +174,7 @@ impl SearchRun {
                 .collect(),
             now: 0,
             decisions: Vec::new(),
+            fold_identifiers: false,
         }
     }
 
@@ -186,6 +192,7 @@ impl SearchRun {
             namespaces,
             now,
             decisions: Vec::new(),
+            fold_identifiers: false,
         }
     }
 
@@ -194,6 +201,14 @@ impl SearchRun {
     /// code files whose path matches an active decision's areas.
     pub fn with_decisions(mut self, decisions: Vec<DecisionMeta>) -> Self {
         self.decisions = decisions;
+        self
+    }
+
+    /// Enable experimental query-side identifier folding: `getUserAccount` is
+    /// embedded as `get user account`, matching the natural-language register the
+    /// index is written in. Off by default pending eval numbers (wdpkr-hax).
+    pub fn with_identifier_folding(mut self, on: bool) -> Self {
+        self.fold_identifiers = on;
         self
     }
 
@@ -216,8 +231,17 @@ impl SearchRun {
             )
         };
 
-        // 2. Embed the query once
-        let query_vector = self.embedder.embed_query(&params.query).await?;
+        // 2. Embed the query once.
+        //
+        // With folding on, an identifier-shaped query is rewritten into the
+        // natural-language register the index is written in before embedding.
+        // The report still echoes what the user actually typed.
+        let embed_text = if self.fold_identifiers {
+            query::split_identifiers(&params.query)
+        } else {
+            params.query.clone()
+        };
+        let query_vector = self.embedder.embed_query(&embed_text).await?;
 
         // 3. Search each namespace, collecting tagged results
         let over_fetch = params.top_k * (params.symbols_per_file + 1) * 3;
@@ -665,6 +689,70 @@ mod tests {
             report.results[0].score,
             report.results[1].score
         );
+    }
+
+    /// An embedder that sends the raw identifier and its split form to opposite
+    /// corners of the vector space, so the two folding modes land on different
+    /// files and the test can tell which text was actually embedded.
+    fn folding_embedder() -> MockEmbedder {
+        let mut e = MockEmbedder::new(3);
+        e.set_override("getUserAccount", vec![0.05, 0.95, 0.0]); // → auth
+        e.set_override("get user account", vec![0.95, 0.05, 0.0]); // → commission
+        e
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn identifier_folding_embeds_the_split_query() {
+        let search = SearchRun::new(
+            Box::new(folding_embedder()),
+            Box::new(seeded_store().await),
+            Namespace::from("test"),
+        )
+        .with_identifier_folding(true);
+
+        let report = search
+            .run(&SearchParams {
+                query: "getUserAccount".into(),
+                top_k: 1,
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.results[0].path, "src/finance/commission.rs");
+        assert_eq!(
+            report.query, "getUserAccount",
+            "the report must echo what the user typed, not the rewrite"
+        );
+    }
+
+    /// Folding is experimental and must stay off unless explicitly enabled.
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn identifier_folding_is_off_by_default() {
+        let search = SearchRun::new(
+            Box::new(folding_embedder()),
+            Box::new(seeded_store().await),
+            Namespace::from("test"),
+        );
+
+        let report = search
+            .run(&SearchParams {
+                query: "getUserAccount".into(),
+                top_k: 1,
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.results[0].path, "src/auth/login.rs");
     }
 
     #[cfg_attr(miri, ignore)]
