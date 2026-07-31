@@ -348,7 +348,10 @@ impl VectorStore for NidusStore {
             let run = |db: &mut Nidus, prefix: Option<&str>| -> Result<Vec<Hit>> {
                 let mut preds = base.clone();
                 if let Some(p) = prefix {
-                    preds.push(Predicate::Glob("file_path".into(), format!("{p}*")));
+                    preds.push(Predicate::Glob(
+                        "file_path".into(),
+                        format!("{}*", case_insensitive_glob(p)),
+                    ));
                 }
                 let sopts = SearchOpts {
                     top_k: opts.top_k,
@@ -397,6 +400,45 @@ impl VectorStore for NidusStore {
 }
 
 // ── Conversion helpers (pure) ──────────────────────────────────────────────
+
+/// Rewrite a literal path prefix into a nidus glob that matches case-insensitively.
+///
+/// nidus's matcher has no case-insensitive mode (unlike Turbopuffer's `IGlob`), but
+/// it does support character classes, so each ASCII letter expands to a two-member
+/// class: `src/Fin` → `[Ss][Rr][Cc]/[Ff][Ii][Nn]`. This is a pure pattern rewrite —
+/// it needs no reindex and does not touch stored data.
+///
+/// The input is a *literal* prefix, so glob metacharacters in it are escaped to
+/// their literal form (nidus matches a literal `*`/`?`/`[` only via a class).
+/// Folding is ASCII-only and deliberately context-free: repo paths are
+/// overwhelmingly ASCII, and a locale-dependent fold would make the same `--scope`
+/// mean different things on different machines.
+fn case_insensitive_glob(prefix: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() * 4);
+    for ch in prefix.chars() {
+        match ch {
+            'a'..='z' => {
+                out.push('[');
+                out.push(ch.to_ascii_uppercase());
+                out.push(ch);
+                out.push(']');
+            }
+            'A'..='Z' => {
+                out.push('[');
+                out.push(ch);
+                out.push(ch.to_ascii_lowercase());
+                out.push(']');
+            }
+            '*' | '?' | '[' => {
+                out.push('[');
+                out.push(ch);
+                out.push(']');
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
 
 fn to_record(doc: &VectorDocument) -> Record {
     let mut attrs: BTreeMap<String, Value> = BTreeMap::new();
@@ -613,6 +655,71 @@ mod tests {
     }
 
     // ── Conversion helpers (pure, Miri-safe) ──────────────────────────
+
+    #[test]
+    fn case_insensitive_glob_expands_ascii_letters() {
+        assert_eq!(case_insensitive_glob("src/"), "[Ss][Rr][Cc]/");
+        assert_eq!(case_insensitive_glob("Fin"), "[Ff][Ii][Nn]");
+    }
+
+    #[test]
+    fn case_insensitive_glob_leaves_non_letters_alone() {
+        assert_eq!(case_insensitive_glob("a1-_/.b"), "[Aa]1-_/.[Bb]");
+    }
+
+    /// A `--scope` prefix is a literal path, so glob metacharacters inside it must
+    /// match literally — nidus expresses a literal `*`/`?`/`[` only via a class.
+    #[test]
+    fn case_insensitive_glob_escapes_metacharacters() {
+        assert_eq!(
+            case_insensitive_glob("a*b?c[d"),
+            "[Aa][*][Bb][?][Cc][[][Dd]"
+        );
+    }
+
+    #[test]
+    fn case_insensitive_glob_passes_through_non_ascii() {
+        assert_eq!(case_insensitive_glob("café/"), "[Cc][Aa][Ff]é/");
+    }
+
+    /// The rewrite is only useful if nidus's own matcher agrees. nidus keeps
+    /// `glob_match` private, so this drives it through a real scoped search.
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    async fn scope_prefix_matches_regardless_of_case() {
+        let store = seeded_store().await;
+        let ns = Namespace::from("repo");
+        store
+            .upsert(
+                &ns,
+                &[
+                    file_doc("a", vec![1.0, 0.0, 0.0], "src/finance/rates.rs", "h1"),
+                    file_doc("b", vec![1.0, 0.0, 0.0], "Src/Finance/fees.rs", "h2"),
+                    file_doc("c", vec![1.0, 0.0, 0.0], "docs/finance/spec.md", "h3"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Every casing of the scope finds both finance files and excludes docs/.
+        for scope in ["src/finance/", "Src/Finance/", "SRC/FINANCE/"] {
+            let hits = store
+                .search(
+                    &ns,
+                    &[1.0, 0.0, 0.0],
+                    &SearchOptions {
+                        top_k: 10,
+                        path_prefixes: vec![scope.into()],
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let mut ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+            ids.sort_unstable();
+            assert_eq!(ids, vec!["a", "b"], "scope {scope} matched the wrong set");
+        }
+    }
 
     #[test]
     fn parse_chunk_kind_cases() {

@@ -440,12 +440,17 @@ fn build_search_filters(opts: &SearchOptions) -> Option<serde_json::Value> {
     let mut conditions: Vec<serde_json::Value> = Vec::new();
     conditions.push(serde_json::json!(["id", "NotEq", META_VECTOR_ID]));
 
+    // `IGlob` (not `Glob`): a `--scope` prefix is a comparison against stored
+    // paths, so it is case-folded. A shell that tab-completed `--scope Src/x` on
+    // a case-insensitive filesystem must not return silently-empty results.
+    // Index-time deletes keep case-sensitive `Glob` — they mutate data and their
+    // paths come from the walker verbatim.
     match opts.path_prefixes.len() {
         0 => {}
         1 => {
             conditions.push(serde_json::json!([
                 "file_path",
-                "Glob",
+                "IGlob",
                 format!("{}*", opts.path_prefixes[0])
             ]));
         }
@@ -453,7 +458,7 @@ fn build_search_filters(opts: &SearchOptions) -> Option<serde_json::Value> {
             let prefix_conditions: Vec<_> = opts
                 .path_prefixes
                 .iter()
-                .map(|p| serde_json::json!(["file_path", "Glob", format!("{p}*")]))
+                .map(|p| serde_json::json!(["file_path", "IGlob", format!("{p}*")]))
                 .collect();
             conditions.push(serde_json::json!(["Or", prefix_conditions]));
         }
@@ -1127,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_single_prefix_uses_glob() {
+    fn filters_single_prefix_uses_case_insensitive_glob() {
         let opts = SearchOptions {
             path_prefixes: vec!["src/finance/".into()],
             ..Default::default()
@@ -1137,7 +1142,7 @@ mod tests {
         let inner = filters[1].as_array().unwrap();
         assert_eq!(inner.len(), 2);
         assert_eq!(inner[1][0], "file_path");
-        assert_eq!(inner[1][1], "Glob");
+        assert_eq!(inner[1][1], "IGlob");
         assert_eq!(inner[1][2], "src/finance/*");
     }
 
@@ -1155,7 +1160,9 @@ mod tests {
         assert_eq!(or_cond[0], "Or");
         let or_inner = or_cond[1].as_array().unwrap();
         assert_eq!(or_inner.len(), 2);
+        assert_eq!(or_inner[0][1], "IGlob");
         assert_eq!(or_inner[0][2], "src/finance/*");
+        assert_eq!(or_inner[1][1], "IGlob");
         assert_eq!(or_inner[1][2], "src/annuity/*");
     }
 
