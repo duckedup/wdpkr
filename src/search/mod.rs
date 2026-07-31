@@ -123,11 +123,30 @@ pub struct SymbolResult {
 
 // ── Orchestrator ──────────────────────────────────────────────────────────
 
+/// How far the fetch may widen when `--filter` starves the result set, and how
+/// fast it grows. The cap bounds the worst case (a filter matching nothing) to a
+/// handful of extra round-trips rather than an unbounded scan.
+const MAX_OVER_FETCH: usize = 2000;
+const OVER_FETCH_GROWTH: usize = 8;
+
 /// What one namespace contributed to a search: its raw hits plus the index
 /// high-water mark used for the report's `indexed_at`.
 struct NamespaceHits {
     indexed_at: Option<String>,
     results: Vec<SearchResult>,
+}
+
+/// The outcome of one fetch across all namespaces, before `--filter` is applied.
+#[derive(Default)]
+struct Round {
+    /// Decayed, source-tagged hits in configured namespace order.
+    results: Vec<(SearchResult, Option<String>)>,
+    primary_namespace: String,
+    primary_indexed_at: Option<String>,
+    any_namespace_found: bool,
+    /// Every existing namespace returned fewer hits than requested, so re-asking
+    /// for more cannot surface anything new.
+    exhausted: bool,
 }
 
 pub struct SearchRun {
@@ -250,6 +269,64 @@ impl SearchRun {
         }))
     }
 
+    /// One fetch across every configured namespace, run concurrently.
+    ///
+    /// Each namespace costs three round-trips (exists → metadata → search) that
+    /// are wholly independent of the other namespaces', so the taps are driven as
+    /// concurrent futures rather than a serial loop: wall-clock is the slowest
+    /// single tap instead of the sum of all of them.
+    ///
+    /// These are futures, not spawned tasks — search runs on a `current_thread`
+    /// runtime for cold-start speed, and the work is network-bound, so concurrent
+    /// polling is what matters, not parallelism across threads.
+    async fn fetch_round(
+        &self,
+        query_vector: &[f32],
+        params: &SearchParams,
+        over_fetch: usize,
+    ) -> Result<Round> {
+        let outcomes = futures_util::future::join_all(
+            self.namespaces
+                .iter()
+                .map(|(ns, _, _)| self.search_namespace(ns, query_vector, params, over_fetch)),
+        )
+        .await;
+
+        // Results are re-assembled in *configured* namespace order, not
+        // completion order, so output stays byte-identical run to run. For the
+        // same reason errors are surfaced in configured order rather than
+        // whichever future happened to fail first.
+        let mut round = Round {
+            exhausted: true,
+            ..Default::default()
+        };
+
+        for (outcome, (ns, source, decay)) in outcomes.into_iter().zip(&self.namespaces) {
+            let Some(found) = outcome? else {
+                continue; // namespace does not exist yet
+            };
+            round.any_namespace_found = true;
+
+            // A namespace that filled the request may be holding more; one that
+            // came up short has given us everything it has.
+            if found.results.len() >= over_fetch {
+                round.exhausted = false;
+            }
+
+            if round.primary_namespace.is_empty() {
+                round.primary_namespace = ns.as_str().to_string();
+                round.primary_indexed_at = found.indexed_at;
+            }
+
+            for mut r in found.results {
+                r.score = apply_decay(r.score, r.last_used_at, self.now, decay);
+                round.results.push((r, source.clone()));
+            }
+        }
+
+        Ok(round)
+    }
+
     pub async fn run(&self, params: &SearchParams) -> Result<SearchReport> {
         // 1. Compile glob filters (fail fast before any API calls)
         let glob_set = if params.filters.is_empty() {
@@ -272,61 +349,50 @@ impl SearchRun {
         // 2. Embed the query once
         let query_vector = self.embedder.embed_query(&params.query).await?;
 
-        // 3. Search every namespace concurrently.
+        // 3. Fetch and group, widening the fetch if `--filter` starved the result
+        //    set.
         //
-        // Each namespace costs three round-trips (exists → metadata → search)
-        // that are wholly independent of the other namespaces', so the taps are
-        // driven as concurrent futures rather than a serial loop: wall-clock is
-        // now the slowest single tap instead of the sum of all of them.
+        //    The store ranks by vector similarity and knows nothing about
+        //    `--filter`, so the glob is applied here, *after* truncation to
+        //    `over_fetch`. That ordering means a narrow filter can return nothing
+        //    at all while matching files sit just below the cutoff — indis-
+        //    tinguishable, to the user, from an empty index.
         //
-        // These are futures, not spawned tasks — search runs on a `current_thread`
-        // runtime for cold-start speed, and the work is network-bound, so
-        // concurrent polling is what matters, not parallelism across threads.
-        let over_fetch = params.top_k * (params.symbols_per_file + 1) * 3;
-        let outcomes = futures_util::future::join_all(
-            self.namespaces
-                .iter()
-                .map(|(ns, _, _)| self.search_namespace(ns, &query_vector, params, over_fetch)),
-        )
-        .await;
+        //    The filter is deliberately NOT pushed down to the store: `--filter`
+        //    patterns are globset patterns, and neither backend speaks globset
+        //    (nidus has no `**`, and Turbopuffer's `Glob` is its own dialect), so
+        //    pushdown would silently change what `--filter` means per backend.
+        //    Instead globset stays the single authority and the fetch widens
+        //    until the filter is satisfied, the store runs dry, or the cap is hit.
+        //    Only a `--filter` query that actually comes up short pays for this.
+        let base_over_fetch = params.top_k * (params.symbols_per_file + 1) * 3;
+        let mut over_fetch = base_over_fetch;
 
-        // Results are re-assembled in *configured* namespace order, not
-        // completion order, so output stays byte-identical run to run. For the
-        // same reason errors are surfaced in configured order rather than
-        // whichever future happened to fail first.
-        let mut all_results: Vec<(SearchResult, Option<String>)> = Vec::new();
-        let mut primary_namespace = String::new();
-        let mut primary_indexed_at: Option<String> = None;
-        let mut any_namespace_found = false;
+        let (results, primary_namespace, primary_indexed_at) = loop {
+            let round = self.fetch_round(&query_vector, params, over_fetch).await?;
 
-        for (outcome, (ns, source, decay)) in outcomes.into_iter().zip(&self.namespaces) {
-            let Some(found) = outcome? else {
-                continue; // namespace does not exist yet
-            };
-            any_namespace_found = true;
-
-            if primary_namespace.is_empty() {
-                primary_namespace = ns.as_str().to_string();
-                primary_indexed_at = found.indexed_at;
+            if !round.any_namespace_found {
+                let ns_name = self
+                    .namespaces
+                    .first()
+                    .map(|(ns, _, _)| ns.as_str().to_string())
+                    .unwrap_or_default();
+                bail!("index not found for namespace '{ns_name}'; run `wdpkr index` first");
             }
 
-            for mut r in found.results {
-                r.score = apply_decay(r.score, r.last_used_at, self.now, decay);
-                all_results.push((r, source.clone()));
+            let grouped =
+                group_results_multi(&round.results, params, glob_set.as_ref(), &self.decisions);
+
+            let starved = glob_set.is_some()
+                && grouped.len() < params.top_k
+                && !round.exhausted
+                && over_fetch < MAX_OVER_FETCH;
+
+            if !starved {
+                break (grouped, round.primary_namespace, round.primary_indexed_at);
             }
-        }
-
-        if !any_namespace_found {
-            let ns_name = self
-                .namespaces
-                .first()
-                .map(|(ns, _, _)| ns.as_str().to_string())
-                .unwrap_or_default();
-            bail!("index not found for namespace '{ns_name}'; run `wdpkr index` first");
-        }
-
-        // 4. Group into file → symbols tiered structure
-        let results = group_results_multi(&all_results, params, glob_set.as_ref(), &self.decisions);
+            over_fetch = (over_fetch * OVER_FETCH_GROWTH).min(MAX_OVER_FETCH);
+        };
 
         Ok(SearchReport {
             query: params.query.clone(),
@@ -982,6 +1048,110 @@ mod tests {
         assert!(first.get("score").is_some());
         assert!(first.get("summary").is_some());
         assert!(first.get("symbols").is_some());
+    }
+
+    /// Seed a store where every top-ranked file is `.md` and the only `.rs` file
+    /// ranks below the initial `over_fetch` cutoff. A `--filter "*.rs"` query here
+    /// used to return nothing at all.
+    async fn store_with_buried_match() -> MockVectorStore {
+        let store = MockVectorStore::new();
+        let ns = Namespace::from("test");
+        store.create_namespace(&ns, 3).await.unwrap();
+
+        let mut docs: Vec<VectorDocument> = (0..8)
+            .map(|i| VectorDocument {
+                id: format!("f-md-{i}"),
+                // Descending similarity to the query vector, all above the .rs file.
+                vector: vec![1.0 - (i as f32 * 0.01), 0.0, 0.0],
+                summary: format!("notes {i}"),
+                file_path: format!("docs/note{i}.md"),
+                chunk_kind: ChunkKind::File,
+                symbol_name: None,
+                symbol_kind: None,
+                start_line: None,
+                end_line: None,
+                language: Some("markdown".into()),
+                content_hash: None,
+                calls: None,
+                called_by: None,
+                last_used_at: None,
+            })
+            .collect();
+
+        docs.push(VectorDocument {
+            id: "f-rs".into(),
+            vector: vec![0.5, 0.5, 0.0],
+            summary: "commission release".into(),
+            file_path: "src/finance/commission.rs".into(),
+            chunk_kind: ChunkKind::File,
+            symbol_name: None,
+            symbol_kind: None,
+            start_line: None,
+            end_line: None,
+            language: Some("rust".into()),
+            content_hash: None,
+            calls: None,
+            called_by: None,
+            last_used_at: None,
+        });
+
+        store.upsert(&ns, &docs).await.unwrap();
+        store
+    }
+
+    /// The store ranks by similarity and knows nothing about `--filter`, so a
+    /// narrow filter can starve the result set. Search must widen the fetch
+    /// rather than report an empty result that looks like an empty index.
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn filter_finds_match_below_initial_over_fetch() {
+        let search = SearchRun::new(
+            Box::new(query_embedder()),
+            Box::new(store_with_buried_match().await),
+            Namespace::from("test"),
+        );
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 1,
+                // over_fetch = top_k * (symbols_per_file + 1) * 3 = 3, so the
+                // .rs file sits well below the first round's cutoff.
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec!["*.rs".into()],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.results.len(), 1, "buried .rs match must be found");
+        assert_eq!(report.results[0].path, "src/finance/commission.rs");
+    }
+
+    /// A filter that matches nothing must still terminate, not widen forever.
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn filter_matching_nothing_returns_empty() {
+        let search = SearchRun::new(
+            Box::new(query_embedder()),
+            Box::new(store_with_buried_match().await),
+            Namespace::from("test"),
+        );
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 1,
+                symbols_per_file: 0,
+                no_symbols: true,
+                scope: vec![],
+                filters: vec!["*.zig".into()],
+            })
+            .await
+            .unwrap();
+
+        assert!(report.results.is_empty());
     }
 
     #[cfg_attr(miri, ignore)]
