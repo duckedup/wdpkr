@@ -41,6 +41,7 @@ tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
 globset = "0.4"
 linear-mg = "0.2"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 serial_test = "3"
