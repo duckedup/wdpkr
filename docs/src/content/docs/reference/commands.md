@@ -45,6 +45,12 @@ wdpkr search "auth flow" --scope src/auth/ -k 10
 | `--pretty` | off | Human-readable output instead of JSON |
 | `--no-decisions` | off | Disable decision recall: don't search decisions or attach `governed_by` |
 
+`--filter` is applied to results after the vector search ranks them, so a narrow
+filter can match files that rank below the initial fetch window. Search widens
+the fetch automatically until it has `-k` matches, the index runs dry, or an
+internal cap is reached — a filtered query that comes up short costs an extra
+round-trip or two but does not silently return nothing.
+
 Results from a non-`files` tap carry a `source` field (e.g. `"source": "linear"`)
 and a scheme-prefixed `path` (e.g. `linear://ENG-123`). See
 [Taps](/guides/taps/) for indexing data sources beyond code, and
