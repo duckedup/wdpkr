@@ -123,6 +123,13 @@ pub struct SymbolResult {
 
 // ── Orchestrator ──────────────────────────────────────────────────────────
 
+/// What one namespace contributed to a search: its raw hits plus the index
+/// high-water mark used for the report's `indexed_at`.
+struct NamespaceHits {
+    indexed_at: Option<String>,
+    results: Vec<SearchResult>,
+}
+
 pub struct SearchRun {
     embedder: Box<dyn Embedder>,
     store: Box<dyn VectorStore>,
@@ -197,6 +204,52 @@ impl SearchRun {
         self
     }
 
+    /// Probe, validate, and search one namespace. Returns `Ok(None)` when the
+    /// namespace has never been indexed — a normal state for an unconfigured
+    /// tap, not an error. Kept side-effect free so the caller can drive one of
+    /// these per tap concurrently and still reassemble in configured order.
+    async fn search_namespace(
+        &self,
+        ns: &Namespace,
+        query_vector: &[f32],
+        params: &SearchParams,
+        over_fetch: usize,
+    ) -> Result<Option<NamespaceHits>> {
+        if !self.store.namespace_exists(ns).await? {
+            return Ok(None);
+        }
+
+        let meta = self.store.get_metadata(ns).await?;
+        if let Some(ref stored_embedder) = meta.embedder {
+            let current = embedder_identity(self.embedder.as_ref());
+            if stored_embedder != &current {
+                bail!(
+                    "embedder mismatch: index was built with {stored_embedder}, \
+                     but search is configured for {current}; \
+                     run `wdpkr index --full` to reindex or change your embedder config"
+                );
+            }
+        }
+
+        let results = self
+            .store
+            .search(
+                ns,
+                query_vector,
+                &SearchOptions {
+                    top_k: over_fetch,
+                    path_prefixes: params.scope.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        Ok(Some(NamespaceHits {
+            indexed_at: meta.hwm_sha,
+            results,
+        }))
+    }
+
     pub async fn run(&self, params: &SearchParams) -> Result<SearchReport> {
         // 1. Compile glob filters (fail fast before any API calls)
         let glob_set = if params.filters.is_empty() {
@@ -219,50 +272,45 @@ impl SearchRun {
         // 2. Embed the query once
         let query_vector = self.embedder.embed_query(&params.query).await?;
 
-        // 3. Search each namespace, collecting tagged results
+        // 3. Search every namespace concurrently.
+        //
+        // Each namespace costs three round-trips (exists → metadata → search)
+        // that are wholly independent of the other namespaces', so the taps are
+        // driven as concurrent futures rather than a serial loop: wall-clock is
+        // now the slowest single tap instead of the sum of all of them.
+        //
+        // These are futures, not spawned tasks — search runs on a `current_thread`
+        // runtime for cold-start speed, and the work is network-bound, so
+        // concurrent polling is what matters, not parallelism across threads.
         let over_fetch = params.top_k * (params.symbols_per_file + 1) * 3;
+        let outcomes = futures_util::future::join_all(
+            self.namespaces
+                .iter()
+                .map(|(ns, _, _)| self.search_namespace(ns, &query_vector, params, over_fetch)),
+        )
+        .await;
+
+        // Results are re-assembled in *configured* namespace order, not
+        // completion order, so output stays byte-identical run to run. For the
+        // same reason errors are surfaced in configured order rather than
+        // whichever future happened to fail first.
         let mut all_results: Vec<(SearchResult, Option<String>)> = Vec::new();
         let mut primary_namespace = String::new();
         let mut primary_indexed_at: Option<String> = None;
         let mut any_namespace_found = false;
 
-        for (ns, source, decay) in &self.namespaces {
-            if !self.store.namespace_exists(ns).await? {
-                continue;
-            }
+        for (outcome, (ns, source, decay)) in outcomes.into_iter().zip(&self.namespaces) {
+            let Some(found) = outcome? else {
+                continue; // namespace does not exist yet
+            };
             any_namespace_found = true;
-
-            let meta = self.store.get_metadata(ns).await?;
-            if let Some(ref stored_embedder) = meta.embedder {
-                let current = embedder_identity(self.embedder.as_ref());
-                if stored_embedder != &current {
-                    bail!(
-                        "embedder mismatch: index was built with {stored_embedder}, \
-                         but search is configured for {current}; \
-                         run `wdpkr index --full` to reindex or change your embedder config"
-                    );
-                }
-            }
 
             if primary_namespace.is_empty() {
                 primary_namespace = ns.as_str().to_string();
-                primary_indexed_at = meta.hwm_sha;
+                primary_indexed_at = found.indexed_at;
             }
 
-            let ns_results = self
-                .store
-                .search(
-                    ns,
-                    &query_vector,
-                    &SearchOptions {
-                        top_k: over_fetch,
-                        path_prefixes: params.scope.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-
-            for mut r in ns_results {
+            for mut r in found.results {
                 r.score = apply_decay(r.score, r.last_used_at, self.now, decay);
                 all_results.push((r, source.clone()));
             }
@@ -1268,6 +1316,71 @@ mod tests {
             files_result.unwrap().source.is_none(),
             "files results should have no source label"
         );
+    }
+
+    /// Namespaces are searched concurrently, so the report must be reassembled
+    /// in *configured* order rather than completion order — otherwise output
+    /// would vary run to run and break callers parsing the JSON.
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn multi_namespace_output_is_deterministic() {
+        let params = || SearchParams {
+            query: "release commission payments".into(),
+            top_k: 5,
+            symbols_per_file: 3,
+            no_symbols: false,
+            scope: vec![],
+            filters: vec![],
+        };
+
+        let run_once = async || {
+            let search = SearchRun::new_multi(
+                Box::new(query_embedder()),
+                Box::new(seeded_multi_store().await),
+                vec![
+                    (Namespace::from("test"), None),
+                    (Namespace::from("test--linear"), Some("linear".into())),
+                ],
+            );
+            serde_json::to_string(&search.run(&params()).await.unwrap()).unwrap()
+        };
+
+        let first = run_once().await;
+        for _ in 0..5 {
+            assert_eq!(run_once().await, first, "search output must be stable");
+        }
+    }
+
+    /// The primary namespace (and its `indexed_at`) is the first *existing*
+    /// namespace in configured order — not whichever future resolves first.
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn primary_namespace_follows_configured_order() {
+        let search = SearchRun::new_multi(
+            Box::new(query_embedder()),
+            Box::new(seeded_multi_store().await),
+            vec![
+                // A namespace that was never indexed must be skipped without
+                // claiming the primary slot.
+                (Namespace::from("test--absent"), Some("absent".into())),
+                (Namespace::from("test"), None),
+                (Namespace::from("test--linear"), Some("linear".into())),
+            ],
+        );
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.namespace, "test");
     }
 
     #[cfg_attr(miri, ignore)]
