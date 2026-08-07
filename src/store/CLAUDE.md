@@ -25,7 +25,10 @@ vendor wdpkr cleanly.
   per-collection `get_meta`/`set_meta` string map; `extra` is JSON-encoded.
 - **AND-only filters; OR via merged searches.** nidus `Filter` is a conjunction of
   `Predicate`s. `chunk_kind`/`language` push down as `Predicate::Eq`; a single path
-  prefix as `Predicate::Glob("file_path", "{prefix}*")`. nidus glob `*` **crosses
+  prefix as `Predicate::IGlob("file_path", "{prefix}*")` — `IGlob` (nidus ≥ 0.43)
+  folds ASCII case, so `--scope` pushdown means the same thing on both backends.
+  Index-time deletes keep case-sensitive `Glob`: they mutate data and their paths
+  come from the walker verbatim. nidus glob `*` **crosses
   `/`** (verified by test), matching DuckDB GLOB / Turbopuffer Glob, so a scope
   matches nested files. Multiple prefixes (OR semantics) can't be one filter, so
   they run as separate searches merged by id (best score), sorted, truncated to
