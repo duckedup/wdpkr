@@ -77,6 +77,18 @@ pub struct GoverningDecision {
     pub status: String,
 }
 
+/// Compile a user-supplied path pattern (`--filter`, a decision `area`) into a
+/// **case-insensitive** glob. Path matching here is a comparison, not a display
+/// concern, so it is deliberately case-folded: `--filter "*.MD"` must match
+/// `README.md`, and a decision scoped to `src/**` must govern `Src/` on a
+/// case-insensitive filesystem. Case-sensitive matching only ever produced
+/// silently-empty results, never a useful distinction.
+fn path_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
+    globset::GlobBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+}
+
 /// Compile decision registry entries into search-layer [`DecisionMeta`] (area
 /// globs + override URIs), keeping glob/registry parsing in one place. Used by
 /// the CLI to feed [`SearchRun::with_decisions`].
@@ -86,7 +98,7 @@ pub fn compile_decisions(reg: &crate::decision::DecisionRegistry) -> Result<Vec<
         .map(|d| {
             let mut builder = globset::GlobSetBuilder::new();
             for area in &d.areas {
-                builder.add(globset::Glob::new(area).with_context(|| {
+                builder.add(path_glob(area).with_context(|| {
                     format!("decision {} has invalid area glob '{area}'", d.id)
                 })?);
             }
@@ -335,7 +347,7 @@ impl SearchRun {
             let mut builder = globset::GlobSetBuilder::new();
             for pattern in &params.filters {
                 builder.add(
-                    globset::Glob::new(pattern)
+                    path_glob(pattern)
                         .with_context(|| format!("invalid --filter glob: {pattern}"))?,
                 );
             }
@@ -1169,6 +1181,31 @@ mod tests {
                 no_symbols: false,
                 scope: vec![],
                 filters: vec!["**/commission.*".into()],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].path, "src/finance/commission.rs");
+    }
+
+    /// `--filter` is a comparison against paths, so it case-folds: a pattern
+    /// typed in the wrong case must not silently return nothing.
+    #[cfg_attr(miri, ignore)]
+    #[tokio::test]
+    async fn filter_glob_is_case_insensitive() {
+        let store = seeded_store().await;
+        let embedder = query_embedder();
+        let search = SearchRun::new(Box::new(embedder), Box::new(store), Namespace::from("test"));
+
+        let report = search
+            .run(&SearchParams {
+                query: "release commission payments".into(),
+                top_k: 5,
+                symbols_per_file: 3,
+                no_symbols: false,
+                scope: vec![],
+                filters: vec!["**/COMMISSION.RS".into()],
             })
             .await
             .unwrap();

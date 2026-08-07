@@ -38,12 +38,17 @@ wdpkr search "auth flow" --scope src/auth/ -k 10
 | `-k`, `--top-k` | `5` | Max file-level results |
 | `--symbols-per-file` | `3` | Max symbols returned per file |
 | `--no-symbols` | off | File-level results only, omit symbol nesting |
-| `--scope <path>` | — | Limit search to subtree(s); repeatable |
-| `--filter <glob>` | — | Glob filter on result paths; repeatable (OR logic) |
+| `--scope <path>` | — | Limit search to subtree(s); repeatable; case-insensitive |
+| `--filter <glob>` | — | Glob filter on result paths; repeatable (OR logic); case-insensitive |
 | `--tap <name>` | all | Limit search to these tap sources (e.g. `files`, `linear`, `notion`, `decision`); repeatable. `--provider` is a deprecated alias |
 | `--terse` | off | Compact output: paths + one-sentence summaries |
 | `--pretty` | off | Human-readable output instead of JSON |
 | `--no-decisions` | off | Disable decision recall: don't search decisions or attach `governed_by` |
+
+`--scope` and `--filter` match paths **case-insensitively**, as do decision
+`areas` globs. Path matching is a comparison, not a display concern, so
+`--filter "*.MD"` matches `README.md` and `--scope Src/auth/` finds `src/auth/` —
+useful when a case-insensitive filesystem tab-completes a path in the wrong case.
 
 `--filter` is applied to results after the vector search ranks them, so a narrow
 filter can match files that rank below the initial fetch window. Search widens

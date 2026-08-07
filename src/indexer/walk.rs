@@ -17,9 +17,15 @@ const BINARY_EXTENSIONS: &[&str] = &[
 ];
 
 fn is_binary_extension(path: &Path) -> bool {
+    // `eq_ignore_ascii_case` rather than `to_lowercase()`: the latter allocated a
+    // String for every file walked, and extensions are ASCII by construction.
     path.extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| BINARY_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .is_some_and(|ext| {
+            BINARY_EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        })
 }
 
 /// Walk the repo from `root`, returning paths to all indexable files.
