@@ -348,7 +348,10 @@ impl VectorStore for NidusStore {
             let run = |db: &mut Nidus, prefix: Option<&str>| -> Result<Vec<Hit>> {
                 let mut preds = base.clone();
                 if let Some(p) = prefix {
-                    preds.push(Predicate::Glob("file_path".into(), format!("{p}*")));
+                    // `IGlob` (not `Glob`): a `--scope` prefix is a comparison
+                    // against stored paths, so it folds ASCII case — same
+                    // predicate and semantics as the Turbopuffer backend.
+                    preds.push(Predicate::IGlob("file_path".into(), format!("{p}*")));
                 }
                 let sopts = SearchOpts {
                     top_k: opts.top_k,
@@ -613,6 +616,47 @@ mod tests {
     }
 
     // ── Conversion helpers (pure, Miri-safe) ──────────────────────────
+
+    /// Pins the case-folding contract wdpkr relies on from nidus's `IGlob`:
+    /// a `--scope` pushdown must match stored paths regardless of casing on
+    /// either side. nidus keeps its matcher private, so this drives it
+    /// through a real scoped search.
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    async fn scope_prefix_matches_regardless_of_case() {
+        let store = seeded_store().await;
+        let ns = Namespace::from("repo");
+        store
+            .upsert(
+                &ns,
+                &[
+                    file_doc("a", vec![1.0, 0.0, 0.0], "src/finance/rates.rs", "h1"),
+                    file_doc("b", vec![1.0, 0.0, 0.0], "Src/Finance/fees.rs", "h2"),
+                    file_doc("c", vec![1.0, 0.0, 0.0], "docs/finance/spec.md", "h3"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Every casing of the scope finds both finance files and excludes docs/.
+        for scope in ["src/finance/", "Src/Finance/", "SRC/FINANCE/"] {
+            let hits = store
+                .search(
+                    &ns,
+                    &[1.0, 0.0, 0.0],
+                    &SearchOptions {
+                        top_k: 10,
+                        path_prefixes: vec![scope.into()],
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let mut ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+            ids.sort_unstable();
+            assert_eq!(ids, vec!["a", "b"], "scope {scope} matched the wrong set");
+        }
+    }
 
     #[test]
     fn parse_chunk_kind_cases() {
