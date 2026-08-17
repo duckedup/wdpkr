@@ -283,8 +283,76 @@ enum ItemOutcome {
     Failed,
 }
 
+/// How many same-name candidates an unqualified call may resolve to before we
+/// treat it as unresolvable and emit nothing.
+///
+/// The chunker records only the last identifier segment of a callee
+/// (`last_identifier_segment`), so `OpenOptions::new()`, `Foo::new()` and a
+/// local `new()` all arrive here as the bare string `new`. Once a name has more
+/// candidates than this, the name carries no information about which one is
+/// meant, and a fan of wrong edges is worse than no edge at all: it is pure
+/// noise that crowds out real results in `wdpkr search` output.
+const MAX_CALL_AMBIGUITY: usize = 3;
+
+/// Past this many definitions repo-wide, a bare name is a naming *convention*
+/// rather than a particular function — `new`, `from`, `default`, `flush` — and
+/// no amount of scope narrowing recovers which one a call site meant. Such names
+/// are dropped outright, before the scope rules run: a file that defines its own
+/// `new` is not evidence that `OpenOptions::new()` refers to it.
+///
+/// Deriving this from how the repo actually names things beats a hardcoded list
+/// of English method names, which would be wrong per-language and per-codebase.
+const UBIQUITY_LIMIT: usize = 8;
+
+/// Directory portion of a repo-relative path — a rough proxy for "same module".
+fn parent_dir(path: &str) -> &str {
+    path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
+}
+
+/// Narrow the same-name candidates for one call site down to the ones plausibly
+/// meant, nearest scope first. Returns empty when the name is too ambiguous to
+/// resolve at all.
+fn narrow_candidates<'a>(
+    candidates: &[(usize, &'a str)],
+    caller_file: &str,
+) -> Vec<(usize, &'a str)> {
+    // 0. A name this common in the repo is generic. Scope proximity is not
+    //    evidence for it, so stop before the scope rules can manufacture one.
+    if candidates.len() > UBIQUITY_LIMIT {
+        return Vec::new();
+    }
+
+    // 1. Same file wins outright. A helper defined beside its caller is the most
+    //    common real edge, and it is the one case a bare name genuinely pins down.
+    let same_file: Vec<_> = candidates
+        .iter()
+        .copied()
+        .filter(|(_, f)| *f == caller_file)
+        .collect();
+    if !same_file.is_empty() {
+        return same_file;
+    }
+
+    // 2. Then the same directory, as long as it is not itself a crowd.
+    let dir = parent_dir(caller_file);
+    let same_dir: Vec<_> = candidates
+        .iter()
+        .copied()
+        .filter(|(_, f)| parent_dir(f) == dir)
+        .collect();
+    if !same_dir.is_empty() && same_dir.len() <= MAX_CALL_AMBIGUITY {
+        return same_dir;
+    }
+
+    // 3. Repo-wide, but only for near-unique names.
+    if candidates.len() <= MAX_CALL_AMBIGUITY {
+        return candidates.to_vec();
+    }
+    Vec::new()
+}
+
 pub fn resolve_call_edges(documents: &mut [VectorDocument]) {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     let mut symbol_table: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
     for (i, doc) in documents.iter().enumerate() {
@@ -298,50 +366,44 @@ pub fn resolve_call_edges(documents: &mut [VectorDocument]) {
         }
     }
 
+    // Resolve each caller's edges once and derive `called_by` from that same
+    // resolution, so the two directions of the graph cannot disagree.
+    let mut resolved_calls: Vec<(usize, Vec<String>)> = Vec::new();
     let mut called_by_map: HashMap<usize, Vec<String>> = HashMap::new();
+
     for (i, doc) in documents.iter().enumerate() {
         if doc.chunk_kind != ChunkKind::Symbol {
             continue;
         }
-        if let Some(ref calls) = doc.calls {
-            let caller_name = doc.symbol_name.as_deref().unwrap_or("?");
-            let caller_ref = format!("{}:{}", doc.file_path, caller_name);
-            for call_name in calls {
-                if let Some(targets) = symbol_table.get(call_name.as_str()) {
-                    for &(target_idx, _) in targets {
-                        if target_idx != i {
-                            called_by_map
-                                .entry(target_idx)
-                                .or_default()
-                                .push(caller_ref.clone());
-                        }
-                    }
+        let Some(ref calls) = doc.calls else { continue };
+        let caller_file = doc.file_path.as_str();
+        let caller_ref = format!(
+            "{caller_file}:{}",
+            doc.symbol_name.as_deref().unwrap_or("?")
+        );
+
+        let mut edges: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for call_name in calls {
+            let Some(candidates) = symbol_table.get(call_name.as_str()) else {
+                continue;
+            };
+            for (target_idx, target_file) in narrow_candidates(candidates, caller_file) {
+                let edge = format!("{target_file}:{call_name}");
+                if !seen.insert(edge.clone()) {
+                    continue;
+                }
+                edges.push(edge);
+                if target_idx != i {
+                    called_by_map
+                        .entry(target_idx)
+                        .or_default()
+                        .push(caller_ref.clone());
                 }
             }
         }
+        resolved_calls.push((i, edges));
     }
-
-    let resolved_calls: Vec<(usize, Vec<String>)> = documents
-        .iter()
-        .enumerate()
-        .filter(|(_, doc)| doc.chunk_kind == ChunkKind::Symbol && doc.calls.is_some())
-        .map(|(i, doc)| {
-            let resolved: Vec<String> = doc
-                .calls
-                .as_ref()
-                .unwrap()
-                .iter()
-                .flat_map(|name| {
-                    symbol_table
-                        .get(name.as_str())
-                        .into_iter()
-                        .flatten()
-                        .map(move |&(_, file)| format!("{file}:{name}"))
-                })
-                .collect();
-            (i, resolved)
-        })
-        .collect();
 
     drop(symbol_table);
 
@@ -350,7 +412,11 @@ pub fn resolve_call_edges(documents: &mut [VectorDocument]) {
     }
     for (i, doc) in documents.iter_mut().enumerate() {
         if doc.chunk_kind == ChunkKind::Symbol {
-            doc.called_by = Some(called_by_map.remove(&i).unwrap_or_default());
+            let mut callers = called_by_map.remove(&i).unwrap_or_default();
+            // One caller may reach a target through several call sites.
+            let mut seen = HashSet::new();
+            callers.retain(|c| seen.insert(c.clone()));
+            doc.called_by = Some(callers);
         }
     }
 }
@@ -487,6 +553,132 @@ mod tests {
         resolve_call_edges(&mut docs);
 
         assert_eq!(docs[0].called_by, Some(vec![]));
+    }
+
+    #[test]
+    fn resolve_drops_calls_to_ubiquitous_names() {
+        // The real-world shape: `new` defined all over the repo, and a caller
+        // that merely writes `OpenOptions::new()`. The chunker strips the
+        // qualifier, so the bare name cannot pick a winner — emit nothing
+        // rather than an edge per definition.
+        let mut docs = vec![sym_doc("c", "src/lock.rs", "try_create_lock", vec!["new"])];
+        // Note `src/model.rs` and `src/diag.rs` sit in the caller's own
+        // directory — proximity must not rescue a name this generic.
+        for (n, file) in [
+            "src/ann/ivf.rs",
+            "src/embed/jina.rs",
+            "src/model.rs",
+            "src/model.rs",
+            "src/diag.rs",
+            "src/store/mod.rs",
+            "src/backend/gcs.rs",
+            "src/cli/backup.rs",
+            "src/server/mod.rs",
+            "tests/e2e/scale.rs",
+        ]
+        .iter()
+        .enumerate()
+        {
+            docs.push(sym_doc(&format!("s{n}"), file, "new", vec![]));
+        }
+
+        resolve_call_edges(&mut docs);
+
+        let calls = docs[0].calls.as_ref().unwrap();
+        assert!(
+            calls.is_empty(),
+            "a repo-wide generic name should resolve to nothing, got: {calls:?}"
+        );
+        for doc in &docs[1..] {
+            assert_eq!(
+                doc.called_by,
+                Some(vec![]),
+                "no target should claim the caller"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_prefers_same_file_over_repo_wide() {
+        let mut docs = vec![
+            sym_doc("s1", "src/a.rs", "caller", vec!["helper"]),
+            sym_doc("s2", "src/a.rs", "helper", vec![]),
+            sym_doc("s3", "src/b.rs", "helper", vec![]),
+            sym_doc("s4", "src/c.rs", "helper", vec![]),
+        ];
+
+        resolve_call_edges(&mut docs);
+
+        assert_eq!(
+            docs[0].calls.as_ref().unwrap(),
+            &vec!["src/a.rs:helper".to_string()],
+            "the same-file definition should win outright"
+        );
+        assert_eq!(docs[1].called_by, Some(vec!["src/a.rs:caller".to_string()]));
+        assert_eq!(docs[2].called_by, Some(vec![]));
+        assert_eq!(docs[3].called_by, Some(vec![]));
+    }
+
+    #[test]
+    fn resolve_prefers_same_directory_over_distant_matches() {
+        let mut docs = vec![
+            sym_doc("s1", "src/store/a.rs", "caller", vec!["helper"]),
+            sym_doc("s2", "src/store/b.rs", "helper", vec![]),
+            sym_doc("s3", "src/cli/c.rs", "helper", vec![]),
+            sym_doc("s4", "src/tap/d.rs", "helper", vec![]),
+            sym_doc("s5", "src/chunk/e.rs", "helper", vec![]),
+        ];
+
+        resolve_call_edges(&mut docs);
+
+        assert_eq!(
+            docs[0].calls.as_ref().unwrap(),
+            &vec!["src/store/b.rs:helper".to_string()],
+            "the same-directory definition should win over distant ones"
+        );
+    }
+
+    #[test]
+    fn resolve_keeps_near_unique_names_across_files() {
+        // Below the ambiguity cap, a cross-file edge is still worth emitting.
+        let mut docs = vec![
+            sym_doc("s1", "src/a.rs", "caller", vec!["rare_helper"]),
+            sym_doc("s2", "src/b.rs", "rare_helper", vec![]),
+        ];
+
+        resolve_call_edges(&mut docs);
+
+        assert_eq!(
+            docs[0].calls.as_ref().unwrap(),
+            &vec!["src/b.rs:rare_helper".to_string()]
+        );
+        assert_eq!(docs[1].called_by, Some(vec!["src/a.rs:caller".to_string()]));
+    }
+
+    #[test]
+    fn resolve_deduplicates_repeated_call_sites() {
+        let mut docs = vec![
+            sym_doc(
+                "s1",
+                "src/a.rs",
+                "caller",
+                vec!["helper", "helper", "helper"],
+            ),
+            sym_doc("s2", "src/a.rs", "helper", vec![]),
+        ];
+
+        resolve_call_edges(&mut docs);
+
+        assert_eq!(
+            docs[0].calls.as_ref().unwrap(),
+            &vec!["src/a.rs:helper".to_string()],
+            "three call sites are still one edge"
+        );
+        assert_eq!(
+            docs[1].called_by,
+            Some(vec!["src/a.rs:caller".to_string()]),
+            "and one caller entry, not three"
+        );
     }
 
     #[test]
