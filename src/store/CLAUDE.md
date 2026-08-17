@@ -13,7 +13,10 @@ vendor wdpkr cleanly.
   namespace; the wdpkr `Namespace` maps to a nidus collection (isolated id space).
   `delete_namespace` → `drop_collection`; create/exists → `create_collection`/
   `has_collection`. All ops are idempotent-guarded with `has_collection`.
-- **Exact brute-force cosine.** nidus's only search mode. `Hit::score` is already
+- **Exact brute-force cosine.** nidus also offers ANN, quantization, and sealed
+  segments, but wdpkr opens with all of them off (`Config` defaults), so the
+  default search path *is* the exact scan — `SearchOpts::exact` is left at its
+  default rather than forced. `Hit::score` is already
   cosine similarity, matching Turbopuffer's `score = 1 - distance`, so `min_score`
   and the output layer are identical across backends — no score transform.
 - **Attributes are typed `Value`s, not SQL.** A `VectorDocument`'s fields become a
@@ -40,6 +43,13 @@ vendor wdpkr cleanly.
   the store wraps one `Nidus` in `Arc<Mutex<_>>` and runs every method inside
   `spawn_blocking`, locking only inside the closure (never across `.await`). Each
   mutating op `flush()`es so a reopened directory sees the data.
+- **On-disk format stays v1.** nidus ≥ 0.60 has a format-version-2 manifest, but v2
+  is only written by `Nidus::set_open_profile` / `nidus configure`, which wdpkr never
+  calls — it opens with `open_dir` and takes the built-in defaults. So a wdpkr-written
+  store stays v1-readable and older wdpkr builds keep opening it (verified against a
+  0.43-written store: read back, searched, and re-opened by 0.43 after a 0.65
+  write+flush). If wdpkr ever starts recording an open profile, that becomes a one-way
+  upgrade and needs a release note.
 - **Tests.** The conversion helpers (`to_record`/`record_to_doc`/meta map) are pure
   Rust and Miri-safe. The store tests use a tokio runtime (reactor FFI) so they
   carry `#[cfg_attr(miri, ignore)]` — nidus itself is pure Rust.

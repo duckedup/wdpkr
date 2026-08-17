@@ -9,7 +9,9 @@
 //! One nidus **directory** holds every namespace; the wdpkr namespace maps to a
 //! nidus **collection** (isolated id space within the shared embedding space).
 //!
-//! Search is **exact brute-force cosine** (nidus's only mode). nidus already
+//! Search is **exact brute-force cosine**. nidus can also do ANN, quantized, and
+//! segment-indexed search, but those are opt-in via `Config` and wdpkr leaves them
+//! off, so the default path is the exact scan. nidus already
 //! returns cosine similarity as `Hit::score`, matching the Turbopuffer adapter's
 //! `score = 1 - distance`, so `min_score` and the output layer are unchanged
 //! across backends.
@@ -353,10 +355,15 @@ impl VectorStore for NidusStore {
                     // predicate and semantics as the Turbopuffer backend.
                     preds.push(Predicate::IGlob("file_path".into(), format!("{p}*")));
                 }
+                // Everything else (`exact`, `projection`, `rank_by`, `limit_per`,
+                // `offset`, `explain`) stays at nidus's defaults: no ANN/quantization
+                // is configured on open, so the default path is already the exact
+                // brute-force scan, and hits carry all attrs.
                 let sopts = SearchOpts {
                     top_k: opts.top_k,
                     filter: Filter(preds),
                     min_score: opts.min_score,
+                    ..Default::default()
                 };
                 db.search(Scope::from(ns.as_str()), &qvec, &sopts)
                     .with_context(|| format!("searching nidus collection {ns}"))

@@ -1047,9 +1047,9 @@ dependencies = [
 
 [[package]]
 name = "nidus"
-version = "0.43.0"
+version = "0.65.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "225dbeec6b87a32284f5da27ec772d0967c5a56ee24da2d9e18bb3731f1afdc8"
+checksum = "75da3a5bdc2534e240c9e7abd8cd8c4c838a8e55560bc5ab389748c9dd19316e"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1058,6 +1058,8 @@ dependencies = [
  "http",
  "memmap2",
  "redis",
+ "regex",
+ "regex-syntax",
  "rusty-s3",
  "serde",
  "tame-gcs",
