@@ -11,13 +11,15 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChunkKind, Namespace, NamespaceMetadata, SearchOptions, SearchResult, StoreProvider,
-    UpsertStats, VectorDocument, VectorStore,
+    ChunkKind, Namespace, NamespaceMetadata, SearchOptions, SearchResult, SettingSpec,
+    StoreProvider, UpsertStats, VectorDocument, VectorStore,
 };
 use crate::config::StoreConfig;
 use crate::http::{self, RetryPolicy};
 
 const META_VECTOR_ID: &str = "__wdpkr_meta__";
+/// Fully-qualified settings key, as core resolves it into [`StoreConfig`].
+const API_KEY: &str = "turbopuffer.api_key";
 const MAX_RETRIES: usize = 3;
 const UPSERT_BATCH_SIZE: usize = 200;
 
@@ -25,13 +27,31 @@ const UPSERT_BATCH_SIZE: usize = 200;
 
 pub struct TurbopufferProvider;
 
+fn no_default() -> String {
+    String::new()
+}
+
+/// The one setting Turbopuffer needs. `file_aliases` keeps the deprecated flat
+/// `store.turbopuffer_api_key` readable; the nested form is what gets written.
+const SETTINGS: &[SettingSpec] = &[SettingSpec {
+    key: "api_key",
+    env: "TURBOPUFFER_API_KEY",
+    secret: true,
+    default: no_default,
+    file_aliases: &["turbopuffer_api_key"],
+}];
+
 impl StoreProvider for TurbopufferProvider {
     fn name(&self) -> &str {
         "turbopuffer"
     }
 
+    fn settings(&self) -> &'static [SettingSpec] {
+        SETTINGS
+    }
+
     fn validate(&self, config: &StoreConfig) -> Result<()> {
-        if config.turbopuffer.api_key.is_empty() {
+        if config.get(API_KEY).is_empty() {
             bail!("TURBOPUFFER_API_KEY is required when store.provider=turbopuffer");
         }
         Ok(())
@@ -53,12 +73,12 @@ pub struct TurbopufferStore {
 
 impl TurbopufferStore {
     pub fn new(config: &StoreConfig, dimension: usize) -> Result<Self> {
-        if config.turbopuffer.api_key.is_empty() {
+        if config.get(API_KEY).is_empty() {
             bail!("TURBOPUFFER_API_KEY is required");
         }
         Ok(Self {
             client: reqwest::Client::new(),
-            api_key: config.turbopuffer.api_key.clone(),
+            api_key: config.get(API_KEY).to_string(),
             base_url: "https://api.turbopuffer.com".into(),
             dimension,
         })
@@ -752,7 +772,6 @@ fn is_missing_attribute_error(body: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{NidusConfig, TurbopufferConfig};
 
     #[test]
     fn missing_attribute_error_detected() {
@@ -781,15 +800,7 @@ mod tests {
 
     /// Build a turbopuffer `StoreConfig` with the given API key.
     fn tp_config(api_key: &str) -> StoreConfig {
-        StoreConfig {
-            provider: "turbopuffer".into(),
-            turbopuffer: TurbopufferConfig {
-                api_key: api_key.into(),
-            },
-            nidus: NidusConfig {
-                path: ":memory:".into(),
-            },
-        }
+        StoreConfig::new("turbopuffer", [(API_KEY, api_key)])
     }
 
     // ── Constructor ───────────────────────────────────────────────────

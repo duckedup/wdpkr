@@ -21,7 +21,7 @@ pub struct DeleteArgs {
 }
 
 pub async fn run(args: DeleteArgs) -> Result<()> {
-    let config = Config::new()?;
+    let config = crate::config::load()?;
     config.store.validate()?;
     let namespace = resolve_delete_namespace(&config, args.tap.as_deref())?;
     let embedder = build_embedder(&config.embed).await?;
@@ -73,7 +73,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn config_with_taps(names: &[&str]) -> Config {
-        let mut config = Config::from_file(None);
+        let mut config = crate::config::load_from_file(None);
         config.indexer.namespace = "repo".into();
         config.taps = names
             .iter()

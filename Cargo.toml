@@ -1,6 +1,6 @@
 [package]
 name = "wdpkr"
-version = "0.13.1"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.96"
 description = "Codebase search via vector retrieval over LLM-generated summaries, exposed as a CLI for AI coding agents."
@@ -16,32 +16,21 @@ name = "wdpkr"
 path = "src/main.rs"
 
 [dependencies]
+# The engine: repo walking, chunking, summarization, embedding, search, and
+# the VectorStore seam. wdpkr is the CLI over it plus the two backends below.
+wdpkr-core = "0.2"
+
 anyhow = "1"
-blake3 = "1"
-ignore = "0.4"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
-nidus = "0.65"
-serde_json = "1"
 dirs = "6"
+nidus = "0.65"
 owo-colors = { version = "4", features = ["supports-colors"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 serde_yaml = "0.9"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "io-util", "time"] }
-tree-sitter = "0.24"
-tree-sitter-language = "0.1"
-tree-sitter-rust = "0.23"
-tree-sitter-go = "0.23"
-tree-sitter-javascript = "0.23"
-tree-sitter-typescript = "0.23"
-tree-sitter-python = "0.23"
-tree-sitter-java = "0.23"
-tree-sitter-cpp = "0.23"
-tree-sitter-c-sharp = "0.23"
-globset = "0.4"
-linear-mg = "0.2"
-futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 serial_test = "3"

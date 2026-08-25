@@ -2423,7 +2423,28 @@ dependencies = [
 
 [[package]]
 name = "wdpkr"
-version = "0.13.1"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "dirs",
+ "nidus",
+ "owo-colors",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "tokio",
+ "wdpkr-core",
+]
+
+[[package]]
+name = "wdpkr-core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e234560633b1280e72fadc3c661679c3a8f8435bd9c46cc5192a698956377bc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2434,13 +2455,11 @@ dependencies = [
  "globset",
  "ignore",
  "linear-mg",
- "nidus",
  "owo-colors",
  "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
- "serial_test",
  "tokio",
  "tree-sitter",
  "tree-sitter-c-sharp",

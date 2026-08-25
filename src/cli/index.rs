@@ -65,7 +65,7 @@ pub async fn run(args: IndexArgs) -> Result<()> {
         bail!("--from is not yet implemented");
     }
 
-    let config = Config::new()?;
+    let config = crate::config::load()?;
 
     if args.dry_run {
         return run_dry_run(&config).await;

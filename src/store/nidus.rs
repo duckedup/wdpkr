@@ -39,7 +39,7 @@
 //! holding the mutex only inside the closure (never across `.await`).
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -47,8 +47,8 @@ use async_trait::async_trait;
 use nidus::{Filter, Hit, Nidus, Predicate, Record, Scope, SearchOpts, Value};
 
 use super::{
-    ChunkKind, Namespace, NamespaceMetadata, SearchOptions, SearchResult, StoreProvider,
-    UpsertStats, VectorDocument, VectorStore,
+    ChunkKind, Namespace, NamespaceMetadata, SearchOptions, SearchResult, SettingSpec,
+    StoreProvider, UpsertStats, VectorDocument, VectorStore,
 };
 use crate::config::StoreConfig;
 
@@ -61,20 +61,52 @@ const META_EXTRA: &str = "extra";
 
 pub struct NidusProvider;
 
+/// Fully-qualified settings key, as core resolves it into [`StoreConfig`].
+const PATH: &str = "nidus.path";
+
+/// Default store directory: `$XDG_DATA_HOME/wdpkr/nidus`, falling back to
+/// `~/.local/share/wdpkr/nidus`. Mirrors the uniform-XDG approach used for the
+/// config file path (see [`wdpkr_core::config::FileConfig::path`]).
+pub fn default_path() -> String {
+    let base = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(xdg)
+    } else if let Some(home) = dirs::home_dir() {
+        home.join(".local").join("share")
+    } else {
+        PathBuf::from(".")
+    };
+    base.join("wdpkr")
+        .join("nidus")
+        .to_string_lossy()
+        .into_owned()
+}
+
+const SETTINGS: &[SettingSpec] = &[SettingSpec {
+    key: "path",
+    env: "WDPKR_NIDUS_PATH",
+    secret: false,
+    default: default_path,
+    file_aliases: &[],
+}];
+
 impl StoreProvider for NidusProvider {
     fn name(&self) -> &str {
         "nidus"
     }
 
+    fn settings(&self) -> &'static [SettingSpec] {
+        SETTINGS
+    }
+
     fn validate(&self, config: &StoreConfig) -> Result<()> {
-        if config.nidus.path.trim().is_empty() {
+        if config.get(PATH).trim().is_empty() {
             bail!("store.nidus.path is required when store.provider=nidus");
         }
         Ok(())
     }
 
     fn build(&self, config: &StoreConfig, dimension: usize) -> Result<Box<dyn VectorStore>> {
-        Ok(Box::new(NidusStore::open(&config.nidus.path, dimension)?))
+        Ok(Box::new(NidusStore::open(config.get(PATH), dimension)?))
     }
 }
 
@@ -565,16 +597,9 @@ fn meta_from_map(map: BTreeMap<String, String>) -> NamespaceMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{NidusConfig, TurbopufferConfig};
 
     fn store_config(path: &str) -> StoreConfig {
-        StoreConfig {
-            provider: "nidus".into(),
-            turbopuffer: TurbopufferConfig {
-                api_key: String::new(),
-            },
-            nidus: NidusConfig { path: path.into() },
-        }
+        StoreConfig::new("nidus", [(PATH, path)])
     }
 
     fn file_doc(id: &str, vector: Vec<f32>, file_path: &str, content_hash: &str) -> VectorDocument {

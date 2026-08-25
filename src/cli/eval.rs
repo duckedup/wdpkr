@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::config::Config;
 use crate::embed::build_embedder;
 use crate::eval::EvalSuite;
 use crate::eval::output;
@@ -42,7 +41,7 @@ pub async fn run(args: EvalArgs) -> Result<()> {
         return Ok(());
     }
 
-    let config = Config::new()?;
+    let config = crate::config::load()?;
     config.store.validate()?;
     config.embed.validate()?;
 
