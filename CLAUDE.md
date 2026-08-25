@@ -89,22 +89,32 @@ wdpkr is a CLI tool that maintains a vector-search index of LLM-generated code s
 - `wdpkr index [--full]` — walks repo, chunks with tree-sitter, summarizes via Anthropic Haiku, embeds via Voyage, upserts to the configured store (Turbopuffer or local nidus)
 - `wdpkr search "<query>"` — embeds query, searches the configured store, returns tiered file+symbol JSON
 
+**The engine is a separate crate.** [`wdpkr-core`](https://crates.io/crates/wdpkr-core) owns everything except the CLI and the store backends, and this repo depends on it. Do NOT add engine code here — chunking, summarization, embedding, indexing, search, taps, config, and the store traits all belong in the `wdpkr-core` repo (`~/Projects/wdpkr-core`). Core's modules are re-exported from `src/lib.rs`, so `wdpkr::chunk`, `wdpkr::indexer`, `wdpkr::testing`, etc. still resolve.
+
 ```
-src/
-├── cli/          # Clap parsing + subcommand dispatch
+wdpkr-core/src/   # the engine — edit in the wdpkr-core repo, not here
 ├── config/       # 4-layer resolution: defaults → file → env → CLI flags
 ├── chunk/        # tree-sitter AST chunking (8 languages)
 ├── ai_providers/ # All model-backend adapters: voyage/openai/ollama (embed) + anthropic (summarize) + capability registry
 ├── http/         # Shared reqwest retry: RetryPolicy + send_with_retry (used by ai_providers + store)
 ├── summarize/    # Summarizer trait + prompt templates + big-file rollup + build_summarizer factory
 ├── embed/        # Embedder trait + build_embedder factory
-├── store/        # VectorStore trait + Turbopuffer + nidus (local) adapters
+├── store/        # VectorStore + StoreProvider traits + provider registry (no backends)
 ├── search/       # Search orchestration + JSON/pretty output
 ├── indexer/      # Full pipeline: git diff → walk → chunk → summarize → embed → upsert
+├── tap/          # Data sources: files, linear, notion
 └── testing/      # Mocks (store, embedder, summarizer) + fixtures
+
+src/              # this repo
+├── cli/          # Clap parsing + subcommand dispatch
+├── config.rs     # Registers the backends, then delegates to core's resolution
+├── store/        # The backends: Turbopuffer + nidus (local)
+└── lib.rs        # Re-exports core's modules + wdpkr's own
 ```
 
 Provider adapters live in one place (`ai_providers/`); the `embed` and `summarize` modules own their traits and a factory that consults `ai_providers::PROVIDERS` (a capability registry — `Embed`/`Summarize`) before dispatching. Voyage is embed-only by design. All HTTP adapters (AI providers and the Turbopuffer store) share `http::send_with_retry`: a reqwest client, bounded exponential-backoff retry on transient send errors and retryable statuses, configurable base URL for testing. The nidus store is the exception — a local, file-backed backend built on the pure-Rust [`nidus`](https://crates.io/crates/nidus) crate (no FFI, no bundled C/C++), wrapping a synchronous `Nidus` handle in `Arc<Mutex<_>>` + `spawn_blocking`.
+
+**The store seam.** Core defines the `VectorStore`/`StoreProvider` traits and a process-global registry but ships no backend. `src/store/register_backends()` registers Turbopuffer and nidus; each declares its settings via `StoreProvider::settings` (a `SettingSpec` per key: file key, env var, default, secret flag, deprecated aliases), and core resolves them through the usual chain. Settings resolve **only** for backends registered at the time, so registration must precede config resolution — use `crate::config::{load, load_from_file, resolve, resolve_from_file}`, never core's `Config::new`/`ResolvedConfig::new` directly. Those wrappers also re-apply wdpkr's default provider (`turbopuffer`), which core deliberately leaves unset.
 
 ## Conventions & Patterns
 

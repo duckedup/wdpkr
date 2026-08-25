@@ -152,7 +152,7 @@ struct DecisionCtx {
 }
 
 async fn setup() -> Result<DecisionCtx> {
-    let config = Config::new()?;
+    let config = crate::config::load()?;
     config.store.validate()?;
     config.embed.validate()?;
     let base = resolve_namespace(&config)?;

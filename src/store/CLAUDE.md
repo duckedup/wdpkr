@@ -1,5 +1,23 @@
 # Store adapter rules
 
+The `VectorStore` / `StoreProvider` traits and the provider registry live in
+`wdpkr-core`, which ships **no** backend. These two are wdpkr's, and they reach
+the engine only by registering into that registry.
+
+## Registering a backend
+
+`register_backends()` in `mod.rs` is the single place backends are wired in. A
+provider must also declare its settings via `StoreProvider::settings` — one
+`SettingSpec` per key, carrying the file key, env var, default, secret flag,
+and any deprecated flat aliases. Core resolves those through the normal
+defaults → file → env chain, which is what makes `store.<backend>.<key>`
+work in `config.yaml` and `wdpkr config list` without core knowing the backend
+exists. Mark credentials `secret: true` so they are withheld from `config list`.
+
+Settings resolve only for backends registered at the time config is resolved,
+so registration has to come first — `crate::config`'s entry points handle that,
+and the CLI goes through them rather than core's constructors.
+
 ## nidus (local backend)
 
 Local, file-backed store (`src/store/nidus.rs`), selected with

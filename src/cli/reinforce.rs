@@ -2,7 +2,6 @@ use anyhow::Result;
 use clap::Args;
 use owo_colors::{OwoColorize, Stream};
 
-use crate::config::Config;
 use crate::embed::build_embedder;
 use crate::indexer::{now_unix_secs, resolve_namespace};
 use crate::store::{Namespace, build_store};
@@ -19,7 +18,7 @@ pub struct ReinforceArgs {
 }
 
 pub async fn run(args: ReinforceArgs) -> Result<()> {
-    let config = Config::new()?;
+    let config = crate::config::load()?;
     config.store.validate()?;
     let base = resolve_namespace(&config)?;
     let embedder = build_embedder(&config.embed).await?;

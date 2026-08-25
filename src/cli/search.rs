@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use clap::Args;
 
-use crate::config::{Config, TapConfig};
+use crate::config::TapConfig;
 use crate::decision::DecisionRegistry;
 use crate::embed::build_embedder;
 use crate::indexer::resolve_namespace;
@@ -55,7 +55,7 @@ pub struct SearchArgs {
 }
 
 pub async fn run(args: SearchArgs) -> Result<()> {
-    let config = Config::new()?;
+    let config = crate::config::load()?;
     config.store.validate()?;
     config.embed.validate()?;
 
@@ -237,7 +237,7 @@ mod tests {
     fn resolve_namespace_from_config() {
         clear_env();
         set_env("WDPKR_NAMESPACE", "my-repo");
-        let config = Config::from_file(None);
+        let config = crate::config::load_from_file(None);
         let ns = resolve_namespace(&config).unwrap();
         assert_eq!(ns.as_str(), "my-repo");
         clear_env();
@@ -248,7 +248,7 @@ mod tests {
     #[serial]
     fn resolve_namespace_derives_from_git_when_empty() {
         clear_env();
-        let config = Config::from_file(None);
+        let config = crate::config::load_from_file(None);
         let ns = resolve_namespace(&config).unwrap();
         assert!(
             ns.as_str().contains("wdpkr"),
@@ -263,7 +263,7 @@ mod tests {
     #[serial]
     async fn run_fails_without_store_credentials() {
         clear_env();
-        // Point config resolution at an empty dir so Config::new() can't pick
+        // Point config resolution at an empty dir so config::load() can't pick
         // up a real ~/.config/wdpkr/config.yaml (which would supply a store
         // credential and let the run reach the embedder).
         let cfg_home = std::env::temp_dir().join(format!(

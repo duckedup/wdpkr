@@ -45,7 +45,7 @@ Every PR must pass `just ci` which runs:
 
 ### Test philosophy
 
-- **Mock external APIs** — use `src/testing/mock_*.rs` for VectorStore, Embedder, Summarizer
+- **Mock external APIs** — use `wdpkr::testing::mock_*` (from `wdpkr-core`) for VectorStore, Embedder, Summarizer
 - **Real tree-sitter** — chunking tests use the actual parser, not mocks
 - **Temp git repos** — integration tests create fixture repos in `/tmp`
 - **No live API calls in tests** — zero cost, deterministic, CI-safe
@@ -70,19 +70,31 @@ Agents consuming `wdpkr search` output should parse the JSON and use:
 
 ## File layout reference
 
+The engine lives in the separate [`wdpkr-core`](https://crates.io/crates/wdpkr-core)
+crate (repo: `~/Projects/wdpkr-core`). This repo is the CLI plus the store
+backends. Engine changes belong in that repo, not here.
+
 | Directory | What it contains |
 |---|---|
 | `src/cli/` | Clap parsing, subcommand dispatch, `templates/` for init |
-| `src/config/` | 4-layer config resolution, `env_or` pattern |
-| `src/chunk/` | Chunker trait, tree-sitter walker, per-language node maps |
-| `src/summarize/` | Summarizer trait, Anthropic adapter, prompts, rollup |
-| `src/embed/` | Embedder trait, Voyage/Ollama/OpenAI adapters |
-| `src/store/` | VectorStore trait, Turbopuffer adapter |
-| `src/search/` | SearchRun orchestration, JSON + pretty output |
-| `src/indexer/` | IndexRun, git utils, repo walker, per-file pipeline |
-| `src/testing/` | MockVectorStore, MockEmbedder, MockSummarizer, fixtures |
+| `src/config.rs` | Registers the backends, then delegates to core's resolution |
+| `src/store/` | The backends: Turbopuffer + nidus (core owns the trait) |
 | `tests/` | Integration tests (search_e2e, index_search_e2e) |
 | `eval/` | Golden-query eval cases (future) |
+
+Re-exported from `wdpkr-core` and reachable as `wdpkr::<module>`:
+
+| Module | What it contains |
+|---|---|
+| `config` | 4-layer config resolution, `env_or` pattern |
+| `chunk` | Chunker trait, tree-sitter walker, per-language node maps |
+| `summarize` | Summarizer trait, Anthropic adapter, prompts, rollup |
+| `embed` | Embedder trait, Voyage/Ollama/OpenAI adapters |
+| `store` | VectorStore + StoreProvider traits, provider registry |
+| `search` | SearchRun orchestration, JSON + pretty output |
+| `indexer` | IndexRun, git utils, repo walker, per-file pipeline |
+| `tap` | Data sources: files, linear, notion |
+| `testing` | MockVectorStore, MockEmbedder, MockSummarizer, fixtures |
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker

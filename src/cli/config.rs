@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use owo_colors::{OwoColorize, Stream, Style};
 
 use super::prompt::{non_empty, prompt_choice, prompt_freetext, prompt_secret};
-use crate::config::{FileConfig, ResolvedConfig, Source};
+use crate::config::{FileConfig, Source};
 
 #[derive(Args, Debug)]
 pub struct ConfigArgs {
@@ -71,7 +71,7 @@ async fn run_init() -> Result<()> {
     let nidus_path = if store_provider == "nidus" {
         prompt_freetext(
             "nidus store directory",
-            &crate::config::default_nidus_path(),
+            &crate::store::nidus::default_path(),
         )?
     } else {
         String::new()
@@ -125,18 +125,21 @@ async fn run_init() -> Result<()> {
     let anthropic_key = prompt_secret("Anthropic API key (ANTHROPIC_API_KEY)")?;
 
     // ── Build FileConfig ──
+    // Backend settings are written through `set_nested`, which lands them in
+    // the canonical `store.<backend>.<key>` shape.
+    let mut store = crate::config::FileStoreConfig {
+        provider: Some(store_provider),
+        ..Default::default()
+    };
+    if let Some(api_key) = non_empty(turbopuffer_key) {
+        store.set_nested("turbopuffer", "api_key", &api_key);
+    }
+    if let Some(path) = non_empty(nidus_path) {
+        store.set_nested("nidus", "path", &path);
+    }
+
     let file_config = FileConfig {
-        store: Some(crate::config::FileStoreConfig {
-            provider: Some(store_provider),
-            turbopuffer: non_empty(turbopuffer_key).map(|api_key| {
-                crate::config::FileTurbopufferConfig {
-                    api_key: Some(api_key),
-                }
-            }),
-            nidus: non_empty(nidus_path)
-                .map(|path| crate::config::FileNidusConfig { path: Some(path) }),
-            ..Default::default()
-        }),
+        store: Some(store),
         embedder: Some(crate::config::FileEmbedConfig {
             provider: Some(embed_provider),
             model: Some(embed_model),
@@ -160,7 +163,7 @@ async fn run_init() -> Result<()> {
 }
 
 async fn run_get(key: &str) -> Result<()> {
-    let resolved = ResolvedConfig::new()?;
+    let resolved = crate::config::resolve()?;
     match resolved.get(key) {
         Some(entry) => {
             println!("{}", entry.value);
@@ -180,7 +183,7 @@ async fn run_set(key: &str, value: &str) -> Result<()> {
 }
 
 async fn run_list() -> Result<()> {
-    let resolved = ResolvedConfig::new()?;
+    let resolved = crate::config::resolve()?;
     let entries = resolved.entries();
     let max_key = entries.iter().map(|e| e.key.len()).max().unwrap_or(0);
     for entry in &entries {
@@ -232,6 +235,16 @@ async fn run_path() -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::test_helpers::{remove_env, remove_envs, set_env};
+
+    /// A `store:` block naming `provider` and one nested backend setting.
+    fn store_block(provider: &str, key: &str, value: &str) -> crate::config::FileStoreConfig {
+        let mut store = crate::config::FileStoreConfig {
+            provider: Some(provider.into()),
+            ..Default::default()
+        };
+        store.set_nested(provider, key, value);
+        store
+    }
     use serial_test::serial;
     use std::path::PathBuf;
 
@@ -291,13 +304,7 @@ mod tests {
     fn file_config_save_writes_providers_and_keys() {
         let tmp = clear_and_setup("save-config");
         let file_config = FileConfig {
-            store: Some(crate::config::FileStoreConfig {
-                provider: Some("turbopuffer".into()),
-                turbopuffer: Some(crate::config::FileTurbopufferConfig {
-                    api_key: Some("tp-key-123".into()),
-                }),
-                ..Default::default()
-            }),
+            store: Some(store_block("turbopuffer", "api_key", "tp-key-123")),
             embedder: Some(crate::config::FileEmbedConfig {
                 provider: Some("voyage".into()),
                 model: Some("voyage-code-3".into()),
@@ -326,18 +333,61 @@ mod tests {
         teardown(&tmp);
     }
 
+    /// `config list` is the user-visible face of the store registry: the
+    /// backends' own settings must show up as `store.<backend>.<key>` rows,
+    /// right after `store.provider`, with secrets withheld.
+    #[test]
+    #[serial]
+    fn list_shows_backend_settings_but_not_secrets() {
+        let tmp = clear_and_setup("list-backend-rows");
+        let entries = crate::config::resolve().unwrap().entries();
+        let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+
+        assert_eq!(keys[0], "store.provider");
+        assert!(
+            keys.contains(&"store.nidus.path"),
+            "nidus declares `path`: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&"store.turbopuffer.api_key"),
+            "an API key must never be listed: {keys:?}"
+        );
+
+        teardown(&tmp);
+    }
+
+    /// A `config set` of a backend key round-trips through the file in the
+    /// canonical nested shape and resolves back to the same value.
+    #[test]
+    #[serial]
+    fn set_backend_key_round_trips() {
+        let tmp = clear_and_setup("set-backend-key");
+        crate::store::register_backends();
+
+        let mut file = FileConfig::default();
+        file.set("store.provider", "nidus").unwrap();
+        file.set("store.nidus.path", "/tmp/wdpkr-set-test").unwrap();
+        let path = file.save().unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("nidus:"), "nested block: {content}");
+
+        let resolved = crate::config::resolve().unwrap();
+        assert_eq!(resolved.config.store.provider, "nidus");
+        assert_eq!(
+            resolved.config.store.get("nidus.path"),
+            "/tmp/wdpkr-set-test"
+        );
+
+        teardown(&tmp);
+    }
+
     #[test]
     #[serial]
     fn api_key_resolves_from_file() {
         let tmp = clear_and_setup("key-from-file");
         let file_config = FileConfig {
-            store: Some(crate::config::FileStoreConfig {
-                provider: Some("turbopuffer".into()),
-                turbopuffer: Some(crate::config::FileTurbopufferConfig {
-                    api_key: Some("file-tp-key".into()),
-                }),
-                ..Default::default()
-            }),
+            store: Some(store_block("turbopuffer", "api_key", "file-tp-key")),
             summarizer: Some(crate::config::FileSummarizerConfig {
                 anthropic_api_key: Some("file-ant-key".into()),
                 ..Default::default()
@@ -346,8 +396,11 @@ mod tests {
         };
         file_config.save().unwrap();
 
-        let resolved = ResolvedConfig::new().unwrap();
-        assert_eq!(resolved.config.store.turbopuffer.api_key, "file-tp-key");
+        let resolved = crate::config::resolve().unwrap();
+        assert_eq!(
+            resolved.config.store.get("turbopuffer.api_key"),
+            "file-tp-key"
+        );
         assert_eq!(resolved.config.summarizer.api_key, "file-ant-key");
 
         teardown(&tmp);
@@ -358,21 +411,25 @@ mod tests {
     fn env_overrides_file_api_key() {
         use crate::config::test_helpers::set_env;
         let tmp = clear_and_setup("key-env-override");
+        // The deprecated flat `store.turbopuffer_api_key` alias, which the
+        // backend still declares and core still reads.
+        let mut store = crate::config::FileStoreConfig::default();
+        store.backends.insert(
+            "turbopuffer_api_key".into(),
+            serde_yaml::Value::String("file-key".into()),
+        );
         let file_config = FileConfig {
-            store: Some(crate::config::FileStoreConfig {
-                turbopuffer_api_key: Some("file-key".into()),
-                ..Default::default()
-            }),
+            store: Some(store),
             ..Default::default()
         };
         file_config.save().unwrap();
 
         set_env("TURBOPUFFER_API_KEY", "env-key");
-        let resolved = ResolvedConfig::new().unwrap();
-        assert_eq!(resolved.config.store.turbopuffer.api_key, "env-key");
+        let resolved = crate::config::resolve().unwrap();
+        assert_eq!(resolved.config.store.get("turbopuffer.api_key"), "env-key");
         assert_eq!(
-            resolved.sources.store.turbopuffer.api_key,
-            crate::config::Source::Env("TURBOPUFFER_API_KEY")
+            resolved.sources.store.get("turbopuffer.api_key"),
+            Some(&crate::config::Source::Env("TURBOPUFFER_API_KEY"))
         );
 
         teardown(&tmp);
@@ -426,7 +483,7 @@ mod tests {
 
         // Verify via the config module that the value persisted to the file
         // and resolves correctly through the full chain.
-        let resolved = ResolvedConfig::new().unwrap();
+        let resolved = crate::config::resolve().unwrap();
         let entry = resolved.get("indexer.concurrency").unwrap();
         assert_eq!(entry.value, "32");
         assert_eq!(entry.source, crate::config::Source::File);
